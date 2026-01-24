@@ -37,7 +37,7 @@
 ### 🏔️ Precision Terrain Shadowing
 The engine utilizes a 72-radial sampling grid to fetch real-time topographic data via the **Open-Elevation API**. It calculates path loss and terrain blocking (Knife-Edge diffraction) to simulate "signal bleeding" and "dead zones" accurately.
 
-### 📱 Native Mobile Experience (v4.0+)
+### 📱 Native Mobile Experience (v4.1)
 Optimized for smartphones with a **Native App UI**:
 - **Bottom Sheet Paradigm**: Swipe-up settings menu for maximum map visibility.
 - **Floating Scan Button**: Dedicated FAB for rapid field analysis.

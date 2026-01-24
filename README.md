@@ -1,16 +1,32 @@
-# React + Vite
+# 9M2PJU Amateur Radio Signals Coverage Map
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A professional web-based signal coverage analysis tool for amateur radio operators. Built with React, Leaflet, and the Okumura-Hata propagation model.
 
-Currently, two official plugins are available:
+## 🚀 Features
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+- **Interactive Analysis**: Click anywhere on the map to instantly calculate signal coverage for that location.
+- **Propagation Model**: Pure implementation of the Okumura-Hata model (Longley-Rice alternative for urban/suburban analysis).
+- **Real-time Controls**: 
+  - Adjust **Transmit Power** (1W - 100W)
+  - Adjust **Frequency** (130MHz - 450MHz)
+  - Adjust **Antenna Height** (2m - 100m)
+- **Midnight Glass UI**: A sleek, modern interface with glassmorphism effects and dark mode as default.
+- **Coverage Legend**: Distinguishes between Strong (S9+), Moderate (S5), and Marginal signals.
 
-## React Compiler
+## 🛠️ Technology Stack
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- **Frontend**: Vite + React
+- **Mapping**: Leaflet.js / React-Leaflet
+- **Icons**: Lucide-React
+- **Propagation Logic**: JavaScript-based Hata Model
 
-## Expanding the ESLint configuration
+## 📦 Deployment
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+This project is configured for **GitHub Pages**.
+
+1. Pushed code to GitHub Repo.
+2. In Repository **Settings > Pages**, select the source for deployment (GitHub Actions or `gh-pages` branch).
+3. The app is available at `https://9M2PJU.github.io/9M2PJU-Amateur-Radio-Signals-Coverage-Map/`.
+
+## 📡 About 9M2PJU
+This project is part of the amateur radio tools developed by **9M2PJU**. Visit my [GitHub Profile](https://github.com/9M2PJU) for more ham radio utilities.

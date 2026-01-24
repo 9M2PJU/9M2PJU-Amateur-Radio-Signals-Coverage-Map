@@ -22,11 +22,10 @@ A professional web-based signal coverage analysis tool for amateur radio operato
 
 ## 📦 Deployment
 
-This project is configured for **GitHub Pages**.
-
-1. Pushed code to GitHub Repo.
-2. In Repository **Settings > Pages**, select the source for deployment (GitHub Actions or `gh-pages` branch).
-3. The app is available at `https://coverage.hamradio.my`.
+1. **Build Locally**: Run `npm run build` to generate the production site in the `/docs` folder.
+2. **Push to GitHub**: Commit and push the `main` branch.
+3. **GitHub Settings**: In your repository **Settings > Pages**, select **Deploy from a branch**, and choose the **main** branch with the **`/docs`** folder.
+4. The app is available at `https://coverage.hamradio.my`.
 
 ## 📡 About 9M2PJU
 This project is part of the amateur radio tools developed by **9M2PJU**. Visit my [GitHub Profile](https://github.com/9M2PJU) for more ham radio utilities.

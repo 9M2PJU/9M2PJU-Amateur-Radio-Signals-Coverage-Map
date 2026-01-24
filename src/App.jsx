@@ -244,7 +244,7 @@ function App() {
         <div className="glass-panel header-panel pc-only">
           <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
             <div style={{ background: 'white', padding: '6px', borderRadius: '10px', display: 'flex', boxShadow: '0 2px 8px rgba(0,0,0,0.05)', border: '1px solid #eee' }}>
-              <img src="/brand_logo_v4.png" alt="Brand" style={{ width: '32px', height: '32px', objectFit: 'contain' }} />
+              <img src="/brand_logo_v5.png" alt="Brand" style={{ width: '32px', height: '32px', objectFit: 'contain' }} />
             </div>
             <div>
               <h1 style={{ fontSize: '1.2rem', fontWeight: '900', letterSpacing: '0.5px' }}>9M2PJU PRO SIGNAL</h1>

@@ -224,7 +224,7 @@ function App() {
         <div className="glass-panel header-panel mobile-only">
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-              <img src="/logo.png" alt="Logo" style={{ width: '28px', height: '28px', objectFit: 'contain' }} />
+              <img src="/brand_logo_v4.png" alt="Logo" style={{ width: '28px', height: '28px', objectFit: 'contain' }} />
               <h1 style={{ margin: 0, fontSize: '1.1rem', fontWeight: '800' }}>9M2PJU</h1>
             </div>
             <div style={{ fontSize: '0.75rem', fontWeight: '700', color: 'var(--text-secondary)' }}>HAAT: {haat.toFixed(1)}m</div>
@@ -244,11 +244,11 @@ function App() {
         <div className="glass-panel header-panel pc-only">
           <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
             <div style={{ background: 'white', padding: '6px', borderRadius: '10px', display: 'flex', boxShadow: '0 2px 8px rgba(0,0,0,0.05)', border: '1px solid #eee' }}>
-              <img src="/logo.png" alt="Brand" style={{ width: '32px', height: '32px', objectFit: 'contain' }} />
+              <img src="/brand_logo_v4.png" alt="Brand" style={{ width: '32px', height: '32px', objectFit: 'contain' }} />
             </div>
             <div>
               <h1 style={{ fontSize: '1.2rem', fontWeight: '900', letterSpacing: '0.5px' }}>9M2PJU PRO SIGNAL</h1>
-              <p style={{ fontSize: '0.75rem', fontWeight: '600' }}>Terrain-Aware Coverage v4.0</p>
+              <p style={{ fontSize: '0.75rem', fontWeight: '600' }}>Terrain-Aware Coverage v4.1</p>
             </div>
           </div>
         </div>

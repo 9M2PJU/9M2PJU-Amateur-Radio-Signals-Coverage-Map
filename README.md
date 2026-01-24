@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="public/logo.png" width="160" alt="9M2PJU PRO Logo">
+  <img src="public/brand_logo_v4.png" width="160" alt="9M2PJU PRO Logo">
 </p>
 
 <h1 align="center">9M2PJU PRO SIGNAL v4.1</h1>
@@ -106,7 +106,7 @@ npm run build
 ---
 
 <p align="center">
-  <img src="public/logo.png" width="40" alt="Logo">
+  <img src="public/brand_logo_v4.png" width="40" alt="Logo">
   <br>
   Built for the Amateur Radio Community by <b>9M2PJU</b>
   <br>

@@ -58,12 +58,38 @@ function MapClickHandler({ onClick }) {
 
 function App() {
   const [position, setPosition] = useState([3.1390, 101.6869]); // Default to Kuala Lumpur
+  const [elevation, setElevation] = useState(0);
   const [power, setPower] = useState(50); // Watts
   const [freq, setFreq] = useState(144); // MHz (2m band)
-  const [hTx, setHTx] = useState(30); // Meters
+  const [hTx, setHTx] = useState(30); // Meters (Height above ground)
   const [hRx, setHRx] = useState(1.5); // Meters
+  const [isLoadingElev, setIsLoadingElev] = useState(false);
+
+  // Fetch elevation when position changes
+  useEffect(() => {
+    const fetchElevation = async () => {
+      setIsLoadingElev(true);
+      try {
+        const response = await fetch(`https://api.open-elevation.com/api/v1/lookup?locations=${position[0]},${position[1]}`);
+        const data = await response.json();
+        if (data.results && data.results[0]) {
+          setElevation(data.results[0].elevation);
+        }
+      } catch (error) {
+        console.error("Failed to fetch elevation:", error);
+      } finally {
+        setIsLoadingElev(false);
+      }
+    };
+
+    fetchElevation();
+  }, [position]);
 
   const powerDbm = 10 * Math.log10(power * 1000);
+
+  // Effective height for Hata model
+  // In a more complex model, we'd use HAAT (Height Above Average Terrain)
+  const effectiveHTx = Math.max(2, hTx);
 
   // Coverage radii based on signal strength thresholds
   const coverageData = useMemo(() => {
@@ -78,9 +104,9 @@ function App() {
 
     return thresholds.map(t => ({
       ...t,
-      radius: findDistanceFromLoss(freq, hTx, hRx, t.loss) * 1000 // Convert km to meters
+      radius: findDistanceFromLoss(freq, effectiveHTx, hRx, t.loss) * 1000 // Convert km to meters
     })).sort((a, b) => b.radius - a.radius);
-  }, [powerDbm, freq, hTx, hRx]);
+  }, [powerDbm, freq, effectiveHTx, hRx]);
 
   return (
     <div className="app-container">
@@ -91,6 +117,21 @@ function App() {
         </div>
 
         <div className="glass-panel control-panel">
+          <div className="control-group" style={{ marginBottom: '24px', borderBottom: '1px solid var(--glass-border)', paddingBottom: '16px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Site Elevation</span>
+              <span className="value-badge" style={{ color: 'var(--accent-blue)' }}>
+                {isLoadingElev ? '...' : `${elevation}m`} AMSL
+              </span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px' }}>
+              <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Antenna Total</span>
+              <span className="value-badge">
+                {elevation + hTx}m AMSL
+              </span>
+            </div>
+          </div>
+
           <div className="control-group">
             <label><Activity size={14} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '4px' }} /> Transmit Power (Watts)</label>
             <div className="slider-container">
@@ -114,7 +155,7 @@ function App() {
           </div>
 
           <div className="control-group">
-            <label><Layers size={14} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '4px' }} /> Antenna Height (m)</label>
+            <label><Layers size={14} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '4px' }} /> Antenna Height (m AGL)</label>
             <div className="slider-container">
               <input
                 type="range" min="2" max="100" value={hTx}
@@ -170,7 +211,8 @@ function App() {
         <Marker position={position}>
           <Popup>
             <strong>Transmitter Site</strong><br />
-            {position[0].toFixed(4)}, {position[1].toFixed(4)}
+            {position[0].toFixed(4)}, {position[1].toFixed(4)}<br />
+            Elev: {elevation}m AMSL
           </Popup>
         </Marker>
       </MapContainer>

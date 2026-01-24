@@ -57,7 +57,7 @@ body {
   pointer-events: none;
 }
 
-.ui-overlay > * {
+.ui-overlay>* {
   pointer-events: auto;
 }
 
@@ -134,13 +134,106 @@ input[type="range"]::-webkit-slider-thumb {
   box-shadow: var(--glass-shadow) !important;
 }
 
-.leaflet-control-zoom-in, .leaflet-control-zoom-out {
+.leaflet-control-zoom-in,
+.leaflet-control-zoom-out {
   background: var(--glass-bg) !important;
   color: white !important;
   border-bottom: 1px solid var(--glass-border) !important;
 }
 
 .leaflet-control-attribution {
-  background: rgba(0, 0, 0, 0.5) !important;
+  background: rgba(255, 255, 255, 0.7) !important;
   color: var(--text-secondary) !important;
+}
+
+/* Mobile Native App UI (v4.0) */
+@media (max-width: 768px) {
+  .ui-overlay {
+    top: auto;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    padding: 0;
+    gap: 0;
+  }
+
+  .header-panel {
+    position: absolute;
+    top: 15px;
+    left: 15px;
+    right: 15px;
+    padding: 12px 18px;
+    border-radius: 20px;
+    z-index: 1002;
+  }
+
+  .control-panel {
+    background: white;
+    border-radius: 24px 24px 0 0;
+    padding: 24px;
+    padding-bottom: env(safe-area-inset-bottom, 24px);
+    max-height: 70vh;
+    overflow-y: auto;
+    pointer-events: auto;
+    box-shadow: 0 -10px 40px rgba(0, 0, 0, 0.1);
+    transform: translateY(calc(100% - 60px));
+    transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .control-panel.open {
+    transform: translateY(0);
+  }
+
+  .bottom-sheet-drag {
+    width: 40px;
+    height: 5px;
+    background: #e0e0e0;
+    border-radius: 10px;
+    margin: 0 auto 20px auto;
+    cursor: pointer;
+  }
+
+  .pro-metrics-bar {
+    display: none !important;
+  }
+
+  .mobile-metrics {
+    display: flex;
+    overflow-x: auto;
+    gap: 12px;
+    padding-bottom: 5px;
+    margin-bottom: 20px;
+    scrollbar-width: none;
+  }
+
+  .mobile-metrics::-webkit-scrollbar {
+    display: none;
+  }
+
+  .mobile-metric-card {
+    min-width: 140px;
+    background: #f8f9fa;
+    padding: 12px;
+    border-radius: 16px;
+    border: 1px solid #eee;
+  }
+
+  .fab-scan {
+    position: absolute;
+    bottom: 80px;
+    right: 20px;
+    width: 60px;
+    height: 60px;
+    border-radius: 30px;
+    background: var(--accent-blue);
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 4px 15px rgba(0, 114, 255, 0.4);
+    border: none;
+    z-index: 1001;
+    pointer-events: auto;
+    cursor: pointer;
+  }
 }

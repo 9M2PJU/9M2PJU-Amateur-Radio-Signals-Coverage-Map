@@ -91,6 +91,8 @@ function App() {
   const [hRx, setHRx] = useState(1.5);
   const [haat, setHaat] = useState(30);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isPanelOpen, setIsPanelOpen] = useState(false);
+  const [freqBand, setFreqBand] = useState('vhf');
 
   // Coverage Polygons
   const [coveragePolygons, setCoveragePolygons] = useState({
@@ -99,11 +101,7 @@ function App() {
     weak: null
   });
 
-  const [areas, setAreas] = useState({
-    strong: 0,
-    moderate: 0,
-    weak: 0
-  });
+  const [areas, setAreas] = useState({ strong: 0, moderate: 0, weak: 0 });
 
   const powerDbm = 10 * Math.log10(power * 1000);
 
@@ -188,6 +186,7 @@ function App() {
       console.error("Pro Analysis failed", e);
     } finally {
       setIsAnalyzing(false);
+      setIsPanelOpen(false); // Close sheet after analysis
     }
   }, [position, elevation, hTx, powerDbm, freq, hRx]);
 
@@ -208,7 +207,7 @@ function App() {
             <p style={{ fontSize: '1rem', fontWeight: '800' }}>{areas.moderate.toLocaleString(undefined, { maximumFractionDigits: 0 })} km²</p>
           </div>
         </div>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: '20px' }}>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: '20px' }} className="pc-only-metrics">
           <div className="metric-badge">
             <Mountain size={14} style={{ marginRight: '6px' }} />
             <span>SITE: {elevation}m AMSL</span>
@@ -221,33 +220,78 @@ function App() {
       </div>
 
       <div className="ui-overlay">
-        <div className="glass-panel header-panel">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <div style={{ background: 'linear-gradient(135deg, var(--accent-blue), var(--accent-purple))', p: '8px', borderRadius: '8px', display: 'flex' }}>
-              <Zap color="white" size={20} />
+        {/* Mobile Header */}
+        <div className="glass-panel header-panel mobile-only">
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <img src="/logo.png" alt="Logo" style={{ width: '28px', height: '28px', objectFit: 'contain' }} />
+              <h1 style={{ margin: 0, fontSize: '1.1rem', fontWeight: '800' }}>9M2PJU</h1>
+            </div>
+            <div style={{ fontSize: '0.75rem', fontWeight: '700', color: 'var(--text-secondary)' }}>HAAT: {haat.toFixed(1)}m</div>
+          </div>
+        </div>
+
+        {/* FAB (Mobile) */}
+        <button
+          className="fab-scan mobile-only"
+          onClick={analyzeTerrain}
+          disabled={isAnalyzing}
+        >
+          {isAnalyzing ? <div className="loading-spinner" /> : <Zap size={24} fill="white" />}
+        </button>
+
+        {/* PC Header */}
+        <div className="glass-panel header-panel pc-only">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+            <div style={{ background: 'white', padding: '6px', borderRadius: '10px', display: 'flex', boxShadow: '0 2px 8px rgba(0,0,0,0.05)', border: '1px solid #eee' }}>
+              <img src="/logo.png" alt="Brand" style={{ width: '32px', height: '32px', objectFit: 'contain' }} />
             </div>
             <div>
-              <h1>9M2PJU PRO SIGNAL</h1>
-              <p>Terrain-Aware Coverage v2.0</p>
+              <h1 style={{ fontSize: '1.2rem', fontWeight: '900', letterSpacing: '0.5px' }}>9M2PJU PRO SIGNAL</h1>
+              <p style={{ fontSize: '0.75rem', fontWeight: '600' }}>Terrain-Aware Coverage v4.0</p>
             </div>
           </div>
         </div>
 
-        <div className="glass-panel control-panel">
-          <div className="control-group">
-            <button
-              className={`action-button pro-btn ${isAnalyzing ? 'loading' : ''}`}
-              onClick={analyzeTerrain}
-              disabled={isAnalyzing}
-              style={{
-                width: '100%', padding: '14px', borderRadius: '12px',
-                background: 'linear-gradient(135deg, #00c6ff, #0072ff)',
-                color: 'white', border: 'none', cursor: 'pointer', fontWeight: '900',
-                fontSize: '0.9rem', marginBottom: '20px', boxShadow: '0 4px 15px rgba(0, 114, 255, 0.3)'
-              }}
-            >
-              {isAnalyzing ? 'Processing Terrain...' : 'CALCULATE HIGH-RES COVERAGE'}
-            </button>
+        <div className={`glass-panel control-panel ${isPanelOpen ? 'open' : ''}`}>
+          <div className="bottom-sheet-drag mobile-only" onClick={() => setIsPanelOpen(!isPanelOpen)} />
+
+          <div className="pc-only">
+            <div className="control-group">
+              <button
+                className={`action-button pro-btn ${isAnalyzing ? 'loading' : ''}`}
+                onClick={analyzeTerrain}
+                disabled={isAnalyzing}
+                style={{
+                  width: '100%', padding: '14px', borderRadius: '12px',
+                  background: 'linear-gradient(135deg, #00c6ff, #0072ff)',
+                  color: 'white', border: 'none', cursor: 'pointer', fontWeight: '900',
+                  fontSize: '0.9rem', marginBottom: '20px', boxShadow: '0 4px 15px rgba(0, 114, 255, 0.3)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px'
+                }}
+              >
+                {isAnalyzing ? <div className="loading-spinner" style={{ width: '18px', height: '18px' }} /> : <Zap size={18} fill="white" />}
+                {isAnalyzing ? 'SCALING TERRAIN...' : 'RUN RF COVERAGE ANALYSIS'}
+              </button>
+            </div>
+          </div>
+
+          <div className="mobile-only">
+            <p style={{ fontSize: '0.7rem', color: '#888', marginBottom: '15px', fontWeight: 'bold' }}>RF METRICS (km²)</p>
+            <div className="mobile-metrics">
+              <div className="mobile-metric-card">
+                <span style={{ fontSize: '0.6rem', color: '#4dbd74', display: 'block' }}>STRONG</span>
+                <strong style={{ fontSize: '0.9rem' }}>{areas.strong.toFixed(0)}</strong>
+              </div>
+              <div className="mobile-metric-card">
+                <span style={{ fontSize: '0.6rem', color: '#f57f17', display: 'block' }}>MODERATE</span>
+                <strong style={{ fontSize: '0.9rem' }}>{areas.moderate.toFixed(0)}</strong>
+              </div>
+              <div className="mobile-metric-card">
+                <span style={{ fontSize: '0.6rem', color: '#d32f2f', display: 'block' }}>FRINGE</span>
+                <strong style={{ fontSize: '0.9rem' }}>{areas.weak.toFixed(0)}</strong>
+              </div>
+            </div>
           </div>
 
           <div className="control-group">
@@ -256,8 +300,25 @@ function App() {
           </div>
 
           <div className="control-group">
-            <label><Radio size={12} style={{ marginRight: '6px' }} /> FREQUENCY: {freq}MHz</label>
-            <input type="range" min="130" max="450" value={freq} onChange={(e) => setFreq(Number(e.target.value))} />
+            <label style={{ fontSize: '0.7rem', color: '#888', display: 'block', marginBottom: '10px' }}><Radio size={12} /> BAND SELECTOR</label>
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
+              <button
+                onClick={() => { setFreqBand('vhf'); setFreq(144); }}
+                style={{ flex: 1, padding: '6px', fontSize: '0.75rem', borderRadius: '8px', border: '1px solid #ddd', background: freqBand === 'vhf' ? '#0072ff' : 'white', color: freqBand === 'vhf' ? 'white' : '#333', fontWeight: 'bold' }}
+              >VHF (30-300)</button>
+              <button
+                onClick={() => { setFreqBand('uhf'); setFreq(430); }}
+                style={{ flex: 1, padding: '6px', fontSize: '0.75rem', borderRadius: '8px', border: '1px solid #ddd', background: freqBand === 'uhf' ? '#0072ff' : 'white', color: freqBand === 'uhf' ? 'white' : '#333', fontWeight: 'bold' }}
+              >UHF/SHF (300-3000)</button>
+            </div>
+            <label>FREQUENCY: {freq}MHz</label>
+            <input
+              type="range"
+              min={freqBand === 'vhf' ? 30 : 300}
+              max={freqBand === 'vhf' ? 300 : 3000}
+              value={freq}
+              onChange={(e) => setFreq(Number(e.target.value))}
+            />
           </div>
 
           <div className="control-group">
@@ -321,6 +382,22 @@ function App() {
       </MapContainer>
 
       <style>{`
+        .loading-spinner {
+          border: 3px solid rgba(0,0,0,0.1);
+          border-top: 3px solid white;
+          border-radius: 50%;
+          width: 24px;
+          height: 24px;
+          animation: spin 1s linear infinite;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        /* Visibility Classes */
+        @media (max-width: 768px) {
+          .pc-only, .pc-only-metrics { display: none !important; }
+        }
+        @media (min-width: 769px) {
+          .mobile-only { display: none !important; }
+        }
         .pro-legend-item {
           display: flex;
           align-items: center;
@@ -331,22 +408,15 @@ function App() {
         .metric-badge {
           display: flex;
           align-items: center;
-          background: rgba(255,255,255,0.05);
+          background: rgba(0,0,0,0.05);
           padding: 6px 12px;
           border-radius: 6px;
           font-size: 0.7rem;
           font-weight: 600;
           color: var(--text-secondary);
         }
-        .pro-metrics-bar {
-          animation: slideDown 0.5s ease;
-        }
-        @keyframes slideDown {
-          from { transform: translateY(-100%); opacity: 0; }
-          to { transform: translateY(0); opacity: 1; }
-        }
       `}</style>
-    </div>
+    </div >
   );
 }
 

@@ -51,7 +51,7 @@ const findDistanceFromLoss = (freq, hTx, hRx, targetLoss) => {
 
 function MapClickHandler({ onClick }) {
   useMapEvents({
-    click: (e) => onClick(e.latlng),
+    click: (e) => onClick([e.latlng.lat, e.latlng.lng]),
   });
   return null;
 }
@@ -70,6 +70,7 @@ function App() {
     const fetchElevation = async () => {
       setIsLoadingElev(true);
       try {
+        if (!position || !Array.isArray(position)) return;
         const response = await fetch(`https://api.open-elevation.com/api/v1/lookup?locations=${position[0]},${position[1]}`);
         const data = await response.json();
         if (data.results && data.results[0]) {
@@ -211,7 +212,7 @@ function App() {
         <Marker position={position}>
           <Popup>
             <strong>Transmitter Site</strong><br />
-            {position[0].toFixed(4)}, {position[1].toFixed(4)}<br />
+            {position && position[0] ? position[0].toFixed(4) : '0'}, {position && position[1] ? position[1].toFixed(4) : '0'}<br />
             Elev: {elevation}m AMSL
           </Popup>
         </Marker>

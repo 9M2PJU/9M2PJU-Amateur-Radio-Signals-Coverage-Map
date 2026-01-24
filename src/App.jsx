@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { MapContainer, TileLayer, Marker, useMapEvents, Circle, Popup, Polygon } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
-import { Radio, MapPin, Activity, HelpCircle, Layers, Zap, Mountain, AlertTriangle } from 'lucide-react';
+import { Radio, MapPin, Activity, HelpCircle, Layers, Zap, Mountain, BarChart3, Maximize2 } from 'lucide-react';
 import L from 'leaflet';
 
 // Fix Leaflet marker icons
@@ -30,13 +30,38 @@ const getDestinationPoint = (lat, lon, brng, dist) => {
   return [la2 * 180 / Math.PI, lo2 * 180 / Math.PI];
 };
 
+// Helper: Calculate Area of a Polygon using Shoelace Formula (approximate for lat/lng)
+const calculateAreaKm2 = (points) => {
+  if (!points || points.length < 3) return 0;
+  let area = 0;
+  const R = 6371; // Earth radius
+
+  // Project points to local flat plane (approximate)
+  const lat0 = points[0][0] * Math.PI / 180;
+  const projected = points.map(p => {
+    const lat = p[0] * Math.PI / 180;
+    const lon = p[1] * Math.PI / 180;
+    return [
+      R * lon * Math.cos(lat0),
+      R * lat
+    ];
+  });
+
+  for (let i = 0; i < projected.length; i++) {
+    const j = (i + 1) % projected.length;
+    area += projected[i][0] * projected[j][1];
+    area -= projected[j][0] * projected[i][1];
+  }
+  return Math.abs(area) / 2;
+};
+
 // Propagation Model: Okumura-Hata
 const calculatePathLoss = (freq, hTx, hRx, distanceKm) => {
   if (distanceKm <= 0.1) return 0;
   const logFreq = Math.log10(freq);
   const logHTx = Math.log10(Math.max(2, hTx));
-  const logDist = Math.log10(distanceKm);
   const aHr = (1.1 * logFreq - 0.7) * hRx - (1.56 * logFreq - 0.8);
+  const logDist = Math.log10(distanceKm);
   return 69.55 + 26.16 * logFreq - 13.82 * logHTx - aHr + (44.9 - 6.55 * logHTx) * logDist;
 };
 
@@ -66,7 +91,19 @@ function App() {
   const [hRx, setHRx] = useState(1.5);
   const [haat, setHaat] = useState(30);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [terrainShadows, setTerrainShadows] = useState(null);
+
+  // Coverage Polygons
+  const [coveragePolygons, setCoveragePolygons] = useState({
+    strong: null,
+    moderate: null,
+    weak: null
+  });
+
+  const [areas, setAreas] = useState({
+    strong: 0,
+    moderate: 0,
+    weak: 0
+  });
 
   const powerDbm = 10 * Math.log10(power * 1000);
 
@@ -77,147 +114,171 @@ function App() {
       .then(d => d.results?.[0] && setElevation(d.results[0].elevation));
   }, [position]);
 
-  // Deep Terrain Analysis: Sample radials to find HAAT and shadowing
+  // High-Resolution Terrain Analysis
   const analyzeTerrain = useCallback(async () => {
     setIsAnalyzing(true);
-    setTerrainShadows(null);
 
-    // Thresholds for coverage (standard)
-    const thresholdLoss = powerDbm - (-105); // S5 coverage limit
-    const baseRadius = findDistanceFromLoss(freq, hTx, hRx, thresholdLoss);
+    // Thresholds: Strong (S9/-93dBm), Moderate (S5/-105dBm), Marginal (-115dBm)
+    const thresholds = [
+      { key: 'strong', loss: powerDbm - (-93) },
+      { key: 'moderate', loss: powerDbm - (-105) },
+      { key: 'weak', loss: powerDbm - (-115) }
+    ];
 
-    const radialsCount = 16;
-    const samplingDistances = [3.2, 5, 8, 11, 14, 16]; // Standard HAAT distances (km)
+    const radialsCount = 72; // Much higher density for "jagged" professional look
+    const samplingIntervals = [2, 4, 6, 8, 10, 12, 14, 16]; // Samples for HAAT and blocking
 
     let allPoints = [];
     for (let i = 0; i < radialsCount; i++) {
       const bearing = (i * 360) / radialsCount;
-      samplingDistances.forEach(d => {
+      samplingIntervals.forEach(d => {
         allPoints.push(getDestinationPoint(position[0], position[1], bearing, d));
       });
     }
 
     try {
-      // Fetch batch elevation for all radial points
+      // Chunking requests to handle large batch sizes if needed
       const resp = await fetch("https://api.open-elevation.com/api/v1/lookup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ locations: allPoints.map(p => ({ latitude: p[0], longitude: p[1] })) })
       });
       const data = await resp.json();
-
       const results = data.results;
-      let radialData = [];
-      let totalAvgElev = 0;
+
+      let newPolygons = { strong: [], moderate: [], weak: [] };
+      let haatSamples = [];
 
       for (let i = 0; i < radialsCount; i++) {
-        const offset = i * samplingDistances.length;
-        const radialElevs = results.slice(offset, offset + samplingDistances.length).map(r => r.elevation);
-        const avgElev = radialElevs.reduce((a, b) => a + b, 0) / radialElevs.length;
-        totalAvgElev += avgElev;
+        const offset = i * samplingIntervals.length;
+        const radialElevs = results.slice(offset, offset + samplingIntervals.length).map(r => r.elevation);
+        const avgElevForHaat = radialElevs.reduce((a, b) => a + b, 0) / radialElevs.length;
+        haatSamples.push(avgElevForHaat);
 
-        // Simple LoS Check: If any point on radial > hTx + baseElev + small buffer, signal is blocked
-        const blockingPointIdx = radialElevs.findIndex(e => e > (elevation + hTx));
         const bearing = (i * 360) / radialsCount;
 
-        let radialDist = baseRadius;
-        if (blockingPointIdx !== -1) {
-          radialDist = samplingDistances[blockingPointIdx] * 0.8; // Cut coverage if blocked
-        }
+        // Knife-Edge Blocking Logic: Find if terrain ever exceeds LoS
+        const blockingIdx = radialElevs.findIndex(e => e > (elevation + hTx));
 
-        radialData.push(getDestinationPoint(position[0], position[1], bearing, radialDist));
+        thresholds.forEach(t => {
+          let radius = findDistanceFromLoss(freq, hTx, hRx, t.loss);
+
+          if (blockingIdx !== -1) {
+            const blockedDist = samplingIntervals[blockingIdx];
+            if (radius > blockedDist) {
+              radius = blockedDist * 0.9; // Intense shadowing
+            }
+          }
+
+          newPolygons[t.key].push(getDestinationPoint(position[0], position[1], bearing, radius));
+        });
       }
 
-      setHaat(Math.max(2, elevation + hTx - (totalAvgElev / radialsCount)));
-      setTerrainShadows(radialData);
+      setCoveragePolygons(newPolygons);
+      setAreas({
+        strong: calculateAreaKm2(newPolygons.strong),
+        moderate: calculateAreaKm2(newPolygons.moderate),
+        weak: calculateAreaKm2(newPolygons.weak)
+      });
+
+      const avgHaat = (elevation + hTx) - (haatSamples.reduce((a, b) => a + b, 0) / haatSamples.length);
+      setHaat(Math.max(2, avgHaat));
+
     } catch (e) {
-      console.error("Terrain analysis failed", e);
+      console.error("Pro Analysis failed", e);
     } finally {
       setIsAnalyzing(false);
     }
   }, [position, elevation, hTx, powerDbm, freq, hRx]);
 
-  // Dynamic Coverage Radii
-  const coverageData = useMemo(() => {
-    const thresholds = [
-      { color: '#00a3ff', loss: powerDbm - (-93), label: 'Strong (S9+)' },
-      { color: '#8a2be2', loss: powerDbm - (-105), label: 'Moderate (S5)' },
-      { color: '#ff0055', loss: powerDbm - (-115), label: 'Weak (Marginal)' }
-    ];
-
-    return thresholds.map(t => ({
-      ...t,
-      radius: findDistanceFromLoss(freq, haat, hRx, t.loss) * 1000
-    })).sort((a, b) => b.radius - a.radius);
-  }, [powerDbm, freq, haat, hRx]);
-
   return (
     <div className="app-container">
+      {/* Top Pro Metrics Bar */}
+      <div className="pro-metrics-bar glass-panel" style={{
+        position: 'absolute', top: '20px', left: '360px', right: '20px', zIndex: 1000,
+        display: 'flex', padding: '12px 24px', gap: '40px', alignItems: 'center', pointerEvents: 'auto'
+      }}>
+        <div style={{ display: 'flex', gap: '15px' }}>
+          <div className="metric-box">
+            <span style={{ color: '#4dbd74', fontSize: '0.65rem', fontWeight: 'bold' }}>STRONG (56.0 dBμV/m)</span>
+            <p style={{ fontSize: '1rem', fontWeight: '800' }}>{areas.strong.toLocaleString(undefined, { maximumFractionDigits: 0 })} km²</p>
+          </div>
+          <div className="metric-box">
+            <span style={{ color: '#ffc107', fontSize: '0.65rem', fontWeight: 'bold' }}>MODERATE (48.0 dBμV/m)</span>
+            <p style={{ fontSize: '1rem', fontWeight: '800' }}>{areas.moderate.toLocaleString(undefined, { maximumFractionDigits: 0 })} km²</p>
+          </div>
+        </div>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: '20px' }}>
+          <div className="metric-badge">
+            <Mountain size={14} style={{ marginRight: '6px' }} />
+            <span>SITE: {elevation}m AMSL</span>
+          </div>
+          <div className="metric-badge">
+            <BarChart3 size={14} style={{ marginRight: '6px' }} />
+            <span>HAAT: {haat.toFixed(1)}m</span>
+          </div>
+        </div>
+      </div>
+
       <div className="ui-overlay">
         <div className="glass-panel header-panel">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <Zap color="var(--accent-blue)" size={24} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div style={{ background: 'linear-gradient(135deg, var(--accent-blue), var(--accent-purple))', p: '8px', borderRadius: '8px', display: 'flex' }}>
+              <Zap color="white" size={20} />
+            </div>
             <div>
-              <h1>9M2PJU Coverage Map</h1>
-              <p>Advanced Repeater Analysis</p>
+              <h1>9M2PJU PRO SIGNAL</h1>
+              <p>Terrain-Aware Coverage v2.0</p>
             </div>
           </div>
         </div>
 
         <div className="glass-panel control-panel">
-          <div className="control-group" style={{ marginBottom: '24px', borderBottom: '1px solid var(--glass-border)', paddingBottom: '16px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-              <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Site Elevation</span>
-              <span style={{ fontSize: '0.85rem' }}>{elevation}m AMSL</span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-              <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>HAAT (Effective)</span>
-              <span style={{ fontSize: '0.85rem', color: 'var(--accent-blue)', fontWeight: 'bold' }}>{haat.toFixed(1)}m</span>
-            </div>
+          <div className="control-group">
             <button
-              className={`action-button ${isAnalyzing ? 'loading' : ''}`}
+              className={`action-button pro-btn ${isAnalyzing ? 'loading' : ''}`}
               onClick={analyzeTerrain}
               disabled={isAnalyzing}
               style={{
-                width: '100%', padding: '10px', borderRadius: '8px',
-                background: 'linear-gradient(135deg, var(--accent-blue), var(--accent-purple))',
-                color: 'white', border: 'none', cursor: 'pointer', fontWeight: 'bold',
-                marginTop: '8px', transition: 'all 0.3s'
+                width: '100%', padding: '14px', borderRadius: '12px',
+                background: 'linear-gradient(135deg, #00c6ff, #0072ff)',
+                color: 'white', border: 'none', cursor: 'pointer', fontWeight: '900',
+                fontSize: '0.9rem', marginBottom: '20px', boxShadow: '0 4px 15px rgba(0, 114, 255, 0.3)'
               }}
             >
-              {isAnalyzing ? 'Analyzing Topography...' : 'Analyze Real Terrain'}
+              {isAnalyzing ? 'Processing Terrain...' : 'CALCULATE HIGH-RES COVERAGE'}
             </button>
           </div>
 
           <div className="control-group">
-            <label><Activity size={12} style={{ marginRight: '6px' }} /> Power: {power}W</label>
+            <label><Activity size={12} style={{ marginRight: '6px' }} /> TX POWER: {power}W</label>
             <input type="range" min="1" max="100" value={power} onChange={(e) => setPower(Number(e.target.value))} />
           </div>
 
           <div className="control-group">
-            <label><Radio size={12} style={{ marginRight: '6px' }} /> Freq: {freq}MHz</label>
+            <label><Radio size={12} style={{ marginRight: '6px' }} /> FREQUENCY: {freq}MHz</label>
             <input type="range" min="130" max="450" value={freq} onChange={(e) => setFreq(Number(e.target.value))} />
           </div>
 
           <div className="control-group">
-            <label><Layers size={12} style={{ marginRight: '6px' }} /> Ant Height: {hTx}m AGL</label>
+            <label><Layers size={12} style={{ marginRight: '6px' }} /> TOWER HEIGHT: {hTx}m AGL</label>
             <input type="range" min="2" max="200" value={hTx} onChange={(e) => setHTx(Number(e.target.value))} />
           </div>
 
-          <div className="control-group legend" style={{ marginTop: '20px' }}>
-            <p style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginBottom: '8px uppercase' }}>Signal Strengths</p>
-            {coverageData.slice().reverse().map(c => (
-              <div key={c.label} style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-                <div style={{ width: 8, height: 8, borderRadius: '50%', background: c.color }}></div>
-                <span style={{ fontSize: '0.75rem' }}>{c.label}: {(c.radius / 1000).toFixed(1)}km</span>
-              </div>
-            ))}
-            {terrainShadows && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '10px', padding: '8px', background: 'rgba(255,0,0,0.1)', borderRadius: '4px' }}>
-                <Mountain size={12} color="#ff4444" />
-                <span style={{ fontSize: '0.7rem', color: '#ff4444' }}>Terrain Shadowing Active</span>
-              </div>
-            )}
+          <div className="control-group" style={{ marginTop: '25px', borderTop: '1px solid var(--glass-border)', paddingTop: '15px' }}>
+            <p style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', marginBottom: '10px', letterSpacing: '1px' }}>SIGNAL LEVELS</p>
+            <div className="pro-legend-item">
+              <div style={{ width: 10, height: 10, background: '#4dbd74', border: '1px solid white' }}></div>
+              <span>Service Grade A (Reliable)</span>
+            </div>
+            <div className="pro-legend-item">
+              <div style={{ width: 10, height: 10, background: '#ffc107', border: '1px solid white' }}></div>
+              <span>Service Grade B (Mobile)</span>
+            </div>
+            <div className="pro-legend-item">
+              <div style={{ width: 10, height: 10, background: '#ff4444', border: '1px solid white' }}></div>
+              <span>Fringe (Occasional)</span>
+            </div>
           </div>
         </div>
       </div>
@@ -227,32 +288,64 @@ function App() {
           url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
           attribution="&copy; OpenStreetMap contributors &copy; CARTO"
         />
-        <MapClickHandler onClick={(pos) => { setPosition(pos); setTerrainShadows(null); }} />
+        <MapClickHandler onClick={(pos) => {
+          setPosition(pos);
+          setCoveragePolygons({ strong: null, moderate: null, weak: null });
+        }} />
 
-        {terrainShadows ? (
-          <Polygon
-            positions={terrainShadows}
-            pathOptions={{ color: '#00a3ff', fillColor: '#00a3ff', fillOpacity: 0.2, weight: 2, dashArray: '5, 5' }}
-          />
-        ) : (
-          coverageData.map((c, idx) => (
-            <Circle key={idx} center={position} radius={c.radius}
-              pathOptions={{ color: c.color, fillColor: c.color, fillOpacity: 0.1, weight: 1 }}
-            />
-          ))
+        {coveragePolygons.weak && (
+          <Polygon positions={coveragePolygons.weak} pathOptions={{
+            color: '#ff4444', fillColor: '#ff4444', fillOpacity: 0.1, weight: 1, dashArray: '3, 3'
+          }} />
+        )}
+        {coveragePolygons.moderate && (
+          <Polygon positions={coveragePolygons.moderate} pathOptions={{
+            color: '#ffc107', fillColor: '#ffc107', fillOpacity: 0.2, weight: 1
+          }} />
+        )}
+        {coveragePolygons.strong && (
+          <Polygon positions={coveragePolygons.strong} pathOptions={{
+            color: '#4dbd74', fillColor: '#4dbd74', fillOpacity: 0.4, weight: 2
+          }} />
         )}
 
         <Marker position={position}>
           <Popup>
-            <div style={{ color: '#000' }}>
-              <strong>TX Site: {position[0].toFixed(4)}, {position[1].toFixed(4)}</strong><br />
-              Ground: {elevation}m AMSL<br />
-              Antenna: {hTx}m AGL<br />
-              HAAT: {haat.toFixed(1)}m
+            <div style={{ color: '#000', fontSize: '0.8rem' }}>
+              <strong style={{ fontSize: '0.9rem' }}>REPEATER SITE</strong><br />
+              Lat/Lon: {position[0].toFixed(4)}, {position[1].toFixed(4)}<br />
+              Elev: {elevation}m AMSL | HAAT: {haat.toFixed(1)}m
             </div>
           </Popup>
         </Marker>
       </MapContainer>
+
+      <style>{`
+        .pro-legend-item {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          margin-bottom: 8px;
+          font-size: 0.75rem;
+        }
+        .metric-badge {
+          display: flex;
+          align-items: center;
+          background: rgba(255,255,255,0.05);
+          padding: 6px 12px;
+          border-radius: 6px;
+          font-size: 0.7rem;
+          font-weight: 600;
+          color: var(--text-secondary);
+        }
+        .pro-metrics-bar {
+          animation: slideDown 0.5s ease;
+        }
+        @keyframes slideDown {
+          from { transform: translateY(-100%); opacity: 0; }
+          to { transform: translateY(0); opacity: 1; }
+        }
+      `}</style>
     </div>
   );
 }

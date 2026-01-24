@@ -26,7 +26,7 @@ This project is configured for **GitHub Pages**.
 
 1. Pushed code to GitHub Repo.
 2. In Repository **Settings > Pages**, select the source for deployment (GitHub Actions or `gh-pages` branch).
-3. The app is available at `https://9M2PJU.github.io/9M2PJU-Amateur-Radio-Signals-Coverage-Map/`.
+3. The app is available at `https://coverage.hamradio.my`.
 
 ## 📡 About 9M2PJU
 This project is part of the amateur radio tools developed by **9M2PJU**. Visit my [GitHub Profile](https://github.com/9M2PJU) for more ham radio utilities.

@@ -60,6 +60,27 @@ Optimized for smartphones with a **Native App UI**:
 
 ---
 
+## 🔬 Mathematical Model
+
+The coverage engine employs the **Okumura-Hata Model** (Suburban implementation) to calculate median path loss. This is the industry standard for predicting signal propagation in built-up and mixed terrain environments.
+
+### 📉 Path Loss Formula
+The median path loss $L_b$ (dB) is calculated as:
+$$L_b = 69.55 + 26.16 \log_{10}(f) - 13.82 \log_{10}(h_{tx}) - a(h_{rx}) + [44.9 - 6.55 \log_{10}(h_{tx})] \log_{10}(d)$$
+
+**Parameters:**
+- $f$ : Frequency (MHz), optimized for $30 - 3000$ MHz
+- $h_{tx}$ : Effective height of the transmitter antenna (m)
+- $h_{rx}$ : Height of the receiver antenna (m)
+- $d$ : Distance from transmitter to receiver (km)
+- $a(h_{rx})$ : Receiver antenna correction factor
+
+### 🏔️ Terrain & Diffraction
+1. **HAAT Calculation**: The Height Above Average Terrain is calculated by sampling 8 points along each of the 72 radials to determine the local mean elevation.
+2. **Knife-Edge Shadowing**: When terrain exceeds the theoretical Line-of-Sight (LoS) path, the engine applies a **Lee-Approximate Shadowing Penalty** to simulate signal diffraction over ridges and obstacles.
+
+---
+
 ## 🏗️ System Architecture
 
 ```mermaid

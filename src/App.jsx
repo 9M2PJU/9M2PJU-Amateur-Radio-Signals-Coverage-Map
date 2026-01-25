@@ -105,6 +105,22 @@ function App() {
 
   const powerDbm = 10 * Math.log10(power * 1000);
 
+  // Initialize with Geolocation
+  useEffect(() => {
+    if ("geolocation" in navigator) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const { latitude, longitude } = pos.coords;
+          setPosition([latitude, longitude]);
+        },
+        (err) => {
+          console.warn("Geolocation access denied or failed:", err.message);
+          // Fallback to default (already set in initial state)
+        }
+      );
+    }
+  }, []);
+
   // Fetch base elevation
   useEffect(() => {
     fetch(`https://api.open-elevation.com/api/v1/lookup?locations=${position[0]},${position[1]}`)

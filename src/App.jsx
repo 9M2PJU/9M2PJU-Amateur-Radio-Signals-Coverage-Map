@@ -85,9 +85,9 @@ function MapClickHandler({ onClick }) {
 function App() {
   const [position, setPosition] = useState([3.1390, 101.6869]);
   const [elevation, setElevation] = useState(0);
-  const [power, setPower] = useState(50);
-  const [freq, setFreq] = useState(144);
-  const [hTx, setHTx] = useState(30);
+  const [power, setPower] = useState(5);
+  const [freq, setFreq] = useState(145);
+  const [hTx, setHTx] = useState(10);
   const [hRx, setHRx] = useState(1.5);
   const [haat, setHaat] = useState(30);
   const [isAnalyzing, setIsAnalyzing] = useState(false);

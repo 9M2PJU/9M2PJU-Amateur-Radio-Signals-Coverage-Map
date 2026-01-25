@@ -237,15 +237,7 @@ function App() {
 
       <div className="ui-overlay">
         {/* Mobile Header */}
-        <div className="glass-panel header-panel mobile-only">
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-              <img src="/brand_logo_v4.png" alt="Logo" style={{ width: '28px', height: '28px', objectFit: 'contain' }} />
-              <h1 style={{ margin: 0, fontSize: '1.1rem', fontWeight: '800' }}>9M2PJU</h1>
-            </div>
-            <div style={{ fontSize: '0.75rem', fontWeight: '700', color: 'var(--text-secondary)' }}>HAAT: {haat.toFixed(1)}m</div>
-          </div>
-        </div>
+        {/* Mobile Header Removed - moved to bottom sheet */}
 
         {/* FAB (Mobile) */}
         <button
@@ -271,6 +263,18 @@ function App() {
 
         <div className={`glass-panel control-panel ${isPanelOpen ? 'open' : ''}`}>
           <div className="bottom-sheet-drag mobile-only" onClick={() => setIsPanelOpen(!isPanelOpen)} />
+
+          <div className="mobile-header-content mobile-only" onClick={() => setIsPanelOpen(!isPanelOpen)} style={{ marginBottom: '20px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <img src="/brand_logo_v4.png" alt="Logo" style={{ width: '32px', height: '32px', objectFit: 'contain' }} />
+                <div>
+                  <h1 style={{ margin: 0, fontSize: '1.1rem', fontWeight: '900', color: 'white', letterSpacing: '0.5px' }}>9M2PJU PRO SIGNAL</h1>
+                  <p style={{ margin: 0, fontSize: '0.65rem', fontWeight: '600', color: 'var(--text-secondary)' }}>Terrain-Aware Coverage v4.1</p>
+                </div>
+              </div>
+            </div>
+          </div>
 
           <div className="pc-only">
             <div className="control-group">

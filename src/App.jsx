@@ -88,6 +88,7 @@ function App() {
   const [power, setPower] = useState(5);
   const [freq, setFreq] = useState(145);
   const [hTx, setHTx] = useState(10);
+  const [gain, setGain] = useState(6);
   const [hRx, setHRx] = useState(1.5);
   const [haat, setHaat] = useState(30);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -134,9 +135,9 @@ function App() {
 
     // Thresholds: Strong (S9/-93dBm), Moderate (S5/-105dBm), Marginal (-115dBm)
     const thresholds = [
-      { key: 'strong', loss: powerDbm - (-93) },
-      { key: 'moderate', loss: powerDbm - (-105) },
-      { key: 'weak', loss: powerDbm - (-115) }
+      { key: 'strong', loss: powerDbm + gain - (-93) },
+      { key: 'moderate', loss: powerDbm + gain - (-105) },
+      { key: 'weak', loss: powerDbm + gain - (-115) }
     ];
 
     const radialsCount = 72; // Much higher density for "jagged" professional look
@@ -204,7 +205,7 @@ function App() {
       setIsAnalyzing(false);
       setIsPanelOpen(false); // Close sheet after analysis
     }
-  }, [position, elevation, hTx, powerDbm, freq, hRx]);
+  }, [position, elevation, hTx, powerDbm, freq, hRx, gain]);
 
   return (
     <div className="app-container">
@@ -320,6 +321,11 @@ function App() {
           </div>
 
           <div className="control-group">
+            <label><Activity size={12} style={{ marginRight: '6px' }} /> ANTENNA GAIN: {gain}dBi</label>
+            <input type="range" min="0" max="20" value={gain} onChange={(e) => setGain(Number(e.target.value))} />
+          </div>
+
+          <div className="control-group">
             <label style={{ fontSize: '0.7rem', color: '#888', display: 'block', marginBottom: '10px' }}><Radio size={12} /> BAND SELECTOR</label>
             <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
               <button
@@ -393,7 +399,7 @@ function App() {
         <Marker position={position}>
           <Popup>
             <div style={{ color: '#000', fontSize: '0.8rem' }}>
-              <strong style={{ fontSize: '0.9rem' }}>REPEATER SITE</strong><br />
+              <strong style={{ fontSize: '0.9rem' }}>TRANSMITTER SITE</strong><br />
               Lat/Lon: {position[0].toFixed(4)}, {position[1].toFixed(4)}<br />
               Elev: {elevation}m AMSL | HAAT: {haat.toFixed(1)}m
             </div>

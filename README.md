@@ -108,24 +108,6 @@ graph TD
 
 ---
 
-## 📦 Local Setup
-
-```bash
-# Clone the PRO repository
-git clone https://github.com/9M2PJU/9M2PJU-Amateur-Radio-Signals-Coverage-Map.git
-
-# Install dependencies
-npm install
-
-# Run dev environment
-npm run dev
-
-# Build for production
-npm run build
-```
-
----
-
 <p align="center">
   <img src="public/brand_logo_v5.png" width="40" alt="Logo">
   <br>

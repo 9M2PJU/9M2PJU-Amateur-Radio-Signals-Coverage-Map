@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="public/brand_logo_v5.png" width="160" alt="9M2PJU Coverage Prediction Logo">
+  <img src="public/brand_logo_v6.png" width="160" alt="9M2PJU Coverage Prediction Logo">
 </p>
 
 <h1 align="center">9M2PJU Coverage Prediction</h1>
@@ -193,7 +193,7 @@ Each grade becomes a polygon built from the predicted distance in each radial di
 ---
 
 <p align="center">
-  <img src="public/brand_logo_v5.png" width="40" alt="Logo">
+  <img src="public/brand_logo_v6.png" width="40" alt="Logo">
   <br>
   Built for the Amateur Radio Community by <b>9M2PJU</b>
   <br>

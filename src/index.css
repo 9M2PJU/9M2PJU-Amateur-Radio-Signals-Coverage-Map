@@ -139,7 +139,7 @@ input[type="range"]::-webkit-slider-thumb {
 
 /* Leaflet Overrides */
 .leaflet-container {
-  background: #0b0e14 !important;
+  background: #d8eef8 !important;
 }
 
 .leaflet-control-zoom {

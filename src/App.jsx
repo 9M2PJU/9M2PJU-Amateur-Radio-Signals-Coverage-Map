@@ -56,6 +56,10 @@ const EMPTY_POLYGONS = { strong: null, moderate: null, weak: null };
 const RADIALS_COUNT = 72;
 const SAMPLING_INTERVALS_KM = [1, 2, 4, 6, 8, 10, 12, 16, 24, 32, 48, 64];
 const MAX_SITES = 4;
+const MAP_MIN_ZOOM = 3;
+const MAP_MAX_ZOOM = 19;
+const WORLD_BOUNDS = [[-85, -180], [85, 180]];
+const FALLBACK_TILE_URL = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256"%3E%3Crect width="256" height="256" fill="%23d8eef8"/%3E%3Cpath d="M0 64h256M0 128h256M0 192h256M64 0v256M128 0v256M192 0v256" stroke="%23b5d2df" stroke-width="1" opacity=".55"/%3E%3C/svg%3E';
 const ELEVATION_ENDPOINT = 'https://api.open-elevation.com/api/v1/lookup';
 const ELEVATION_CHUNK_SIZE = 60;
 const ELEVATION_TIMEOUT_MS = 12000;
@@ -675,6 +679,10 @@ function App() {
       <MapContainer
         center={mapCenter}
         zoom={11}
+        minZoom={MAP_MIN_ZOOM}
+        maxZoom={MAP_MAX_ZOOM}
+        maxBounds={WORLD_BOUNDS}
+        maxBoundsViscosity={0.85}
         className="map-container"
         zoomControl={false}
         scrollWheelZoom
@@ -689,7 +697,13 @@ function App() {
               <TileLayer
                 url={layer.url}
                 attribution={layer.attribution}
-                maxZoom={layer.maxZoom}
+                minZoom={MAP_MIN_ZOOM}
+                maxZoom={MAP_MAX_ZOOM}
+                maxNativeZoom={layer.maxZoom ?? MAP_MAX_ZOOM}
+                keepBuffer={4}
+                updateWhenZooming={false}
+                updateWhenIdle
+                errorTileUrl={FALLBACK_TILE_URL}
                 subdomains={layer.subdomains ?? 'abc'}
               />
             </LayersControl.BaseLayer>

@@ -655,18 +655,18 @@ function App() {
           </div>
 
           <div className="control-group" style={{ marginTop: '25px', borderTop: '1px solid var(--glass-border)', paddingTop: '15px' }}>
-            <p style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', marginBottom: '10px', letterSpacing: '1px' }}>SIGNAL LEVELS</p>
+            <p style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', marginBottom: '10px', letterSpacing: '1px' }}>PREDICTED ZONES</p>
             <div className="pro-legend-item">
               <div style={{ width: 10, height: 10, background: '#4dbd74', border: '1px solid white' }}></div>
-              <span>Service Grade A (Reliable)</span>
+              <span>Strong signal</span>
             </div>
             <div className="pro-legend-item">
               <div style={{ width: 10, height: 10, background: '#ffc107', border: '1px solid white' }}></div>
-              <span>Service Grade B (Mobile)</span>
+              <span>Moderate signal</span>
             </div>
             <div className="pro-legend-item">
               <div style={{ width: 10, height: 10, background: '#ff4444', border: '1px solid white' }}></div>
-              <span>Fringe (Occasional)</span>
+              <span>Fringe signal</span>
             </div>
           </div>
         </div>

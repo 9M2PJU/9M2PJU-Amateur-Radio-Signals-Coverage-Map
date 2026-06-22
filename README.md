@@ -181,36 +181,6 @@ Each grade becomes a polygon built from the predicted distance in each radial di
 
 ---
 
-## Local Development
-
-Install dependencies:
-
-```bash
-npm install
-```
-
-Run the development server:
-
-```bash
-npm run dev
-```
-
-Run lint:
-
-```bash
-npm run lint
-```
-
-Build the GitHub Pages output:
-
-```bash
-npm run build
-```
-
-The production build is written to `docs/`.
-
----
-
 ## Technology Stack
 
 - **Core**: React, Vite

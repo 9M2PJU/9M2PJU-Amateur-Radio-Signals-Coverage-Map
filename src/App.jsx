@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { MapContainer, TileLayer, Marker, useMapEvents, Popup, Polygon, LayersControl } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, useMapEvents, Popup, Polygon, LayersControl, ZoomControl } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import { Radio, Activity, Layers, Zap, Mountain, BarChart3, Plus, Trash2, Antenna } from 'lucide-react';
 import L from 'leaflet';
@@ -527,7 +527,7 @@ function App() {
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
               <img src="/brand_logo_v4.png" alt="Logo" style={{ width: '32px', height: '32px', objectFit: 'contain' }} />
               <div>
-                <h1 style={{ margin: 0, fontSize: '1.1rem', fontWeight: '900', color: 'white', letterSpacing: '0.5px' }}>9M2PJU Coverage Prediction</h1>
+                <h1 style={{ margin: 0, fontSize: '1.1rem', fontWeight: '900', color: 'var(--title-blue)', letterSpacing: '0.5px' }}>9M2PJU Coverage Prediction</h1>
                 <p style={{ margin: 0, fontSize: '0.65rem', fontWeight: '600', color: 'var(--text-secondary)' }}>Multi-Site Coverage Prediction v4.3</p>
               </div>
             </div>
@@ -672,7 +672,17 @@ function App() {
         </div>
       </div>
 
-      <MapContainer center={mapCenter} zoom={11} className="map-container" zoomControl={false}>
+      <MapContainer
+        center={mapCenter}
+        zoom={11}
+        className="map-container"
+        zoomControl={false}
+        scrollWheelZoom
+        wheelPxPerZoomLevel={80}
+        doubleClickZoom
+        touchZoom
+        keyboard
+      >
         <LayersControl position="topright">
           {MAP_LAYERS.map((layer) => (
             <LayersControl.BaseLayer key={layer.name} name={layer.name} checked={layer.checked}>
@@ -685,6 +695,7 @@ function App() {
             </LayersControl.BaseLayer>
           ))}
         </LayersControl>
+        <ZoomControl position="topright" />
         <MapClickHandler onClick={updateActiveSitePosition} />
 
         {sites.map((site) => (

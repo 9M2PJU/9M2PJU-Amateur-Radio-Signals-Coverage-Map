@@ -4,6 +4,7 @@
   --glass-border: rgba(255, 255, 255, 0.1);
   --accent-blue: #00a3ff;
   --accent-purple: #8a2be2;
+  --title-blue: #4dbdff;
   --text-primary: #f0f6fc;
   --text-secondary: #8b949e;
   --panel-radius: 16px;
@@ -77,10 +78,9 @@ body {
   font-size: 1.25rem;
   font-weight: 700;
   line-height: 1.15;
-  background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
+  color: var(--title-blue);
+  background: none;
+  -webkit-text-fill-color: var(--title-blue);
   margin-bottom: 4px;
 }
 

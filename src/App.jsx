@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { MapContainer, TileLayer, Marker, useMapEvents, Popup, Polygon, LayersControl } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import { Radio, Activity, Layers, Zap, Mountain, BarChart3, Plus, Trash2, Antenna } from 'lucide-react';
@@ -56,6 +56,10 @@ const EMPTY_POLYGONS = { strong: null, moderate: null, weak: null };
 const RADIALS_COUNT = 72;
 const SAMPLING_INTERVALS_KM = [1, 2, 4, 6, 8, 10, 12, 16, 24, 32, 48, 64];
 const MAX_SITES = 4;
+const ELEVATION_ENDPOINT = 'https://api.open-elevation.com/api/v1/lookup';
+const ELEVATION_CHUNK_SIZE = 60;
+const ELEVATION_TIMEOUT_MS = 12000;
+const ELEVATION_RETRIES = 2;
 
 const createSite = (id, position, color) => ({
   id,
@@ -102,6 +106,7 @@ const calculateAreaKm2 = (points) => {
 };
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const calculatePathLoss = (freq, effectiveHTx, hRx, distanceKm) => {
   if (distanceKm <= 0.1) return 0;
@@ -175,27 +180,67 @@ const findReliableDistance = ({ freq, effectiveHTx, hTx, hRx, targetLoss, radial
   return low;
 };
 
-const fetchElevationBatch = async (points) => {
-  const chunkSize = 100;
-  const elevations = [];
+const fetchWithTimeout = async (url, options = {}, timeoutMs = ELEVATION_TIMEOUT_MS) => {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
 
-  for (let start = 0; start < points.length; start += chunkSize) {
-    const chunk = points.slice(start, start + chunkSize);
-    const resp = await fetch('https://api.open-elevation.com/api/v1/lookup', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        locations: chunk.map(([latitude, longitude]) => ({ latitude, longitude })),
-      }),
-    });
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+};
 
-    if (!resp.ok) throw new Error(`Elevation lookup failed: ${resp.status}`);
+const fetchElevationChunk = async (chunk) => {
+  let lastError;
 
-    const data = await resp.json();
-    elevations.push(...(data.results ?? []).map((result) => result.elevation ?? 0));
+  for (let attempt = 0; attempt <= ELEVATION_RETRIES; attempt++) {
+    try {
+      const resp = await fetchWithTimeout(ELEVATION_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          locations: chunk.map(([latitude, longitude]) => ({ latitude, longitude })),
+        }),
+      });
+
+      if (!resp.ok) throw new Error(`Elevation lookup failed: ${resp.status}`);
+
+      const data = await resp.json();
+      const results = data.results ?? [];
+      if (!Array.isArray(results) || results.length === 0) throw new Error('Elevation lookup returned no results');
+
+      return {
+        elevations: chunk.map((_, index) => results[index]?.elevation),
+        failed: false,
+      };
+    } catch (error) {
+      lastError = error;
+      if (attempt < ELEVATION_RETRIES) {
+        await delay(450 * (attempt + 1));
+      }
+    }
   }
 
-  return elevations;
+  console.warn('Elevation chunk failed; using fallback terrain for this chunk:', lastError?.message ?? lastError);
+  return {
+    elevations: chunk.map(() => undefined),
+    failed: true,
+  };
+};
+
+const fetchElevationBatch = async (points) => {
+  const elevations = [];
+  let failedChunks = 0;
+
+  for (let start = 0; start < points.length; start += ELEVATION_CHUNK_SIZE) {
+    const chunk = points.slice(start, start + ELEVATION_CHUNK_SIZE);
+    const result = await fetchElevationChunk(chunk);
+    elevations.push(...result.elevations);
+    if (result.failed) failedChunks += 1;
+  }
+
+  return { elevations, failedChunks };
 };
 
 function MapClickHandler({ onClick }) {
@@ -219,9 +264,15 @@ function App() {
   const [isPanelOpen, setIsPanelOpen] = useState(false);
   const [freqBand, setFreqBand] = useState('vhf');
   const [nextSiteId, setNextSiteId] = useState(2);
+  const [analysisNotice, setAnalysisNotice] = useState('Ready for coverage prediction.');
+  const isAnalyzingRef = useRef(false);
+  const sitesRef = useRef(sites);
 
   const activeSite = sites.find((site) => site.id === activeSiteId) ?? sites[0];
   const mapCenter = activeSite?.position ?? [3.1390, 101.6869];
+  const activeSitePreviewId = activeSite?.id;
+  const activeSiteLat = activeSite?.position[0];
+  const activeSiteLon = activeSite?.position[1];
   const powerDbm = 10 * Math.log10(power * 1000);
   const combinedAreas = useMemo(() => sites.reduce((total, site) => ({
     strong: total.strong + site.areas.strong,
@@ -230,6 +281,10 @@ function App() {
   }), { ...EMPTY_AREAS }), [sites]);
 
   const analyzedSites = sites.filter((site) => site.coveragePolygons.weak).length;
+
+  useEffect(() => {
+    sitesRef.current = sites;
+  }, [sites]);
 
   useEffect(() => {
     if ('geolocation' in navigator) {
@@ -251,16 +306,16 @@ function App() {
 
   useEffect(() => {
     let cancelled = false;
-    const site = activeSite;
-    if (!site) return undefined;
+    if (!activeSitePreviewId || typeof activeSiteLat !== 'number' || typeof activeSiteLon !== 'number') return undefined;
 
-    fetch(`https://api.open-elevation.com/api/v1/lookup?locations=${site.position[0]},${site.position[1]}`)
-      .then((response) => response.json())
-      .then((data) => {
-        const elevation = data.results?.[0]?.elevation;
+    fetchElevationBatch([[activeSiteLat, activeSiteLon]])
+      .then(({ elevations }) => {
+        const elevation = elevations[0];
         if (cancelled || typeof elevation !== 'number') return;
         setSites((currentSites) => currentSites.map((currentSite) => (
-          currentSite.id === site.id ? { ...currentSite, elevation } : currentSite
+          currentSite.id === activeSitePreviewId && currentSite.elevation !== elevation
+            ? { ...currentSite, elevation }
+            : currentSite
         )));
       })
       .catch((err) => console.warn('Elevation preview failed:', err.message));
@@ -268,7 +323,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [activeSite]);
+  }, [activeSitePreviewId, activeSiteLat, activeSiteLon]);
 
   const updateActiveSitePosition = useCallback((position) => {
     setSites((currentSites) => currentSites.map((site) => (
@@ -312,7 +367,7 @@ function App() {
       });
     }
 
-    const elevations = await fetchElevationBatch([site.position, ...radialPoints]);
+    const { elevations, failedChunks } = await fetchElevationBatch([site.position, ...radialPoints]);
     const siteElevation = elevations[0] ?? site.elevation;
     const radialElevations = elevations.slice(1);
     const haatSamples = [];
@@ -358,28 +413,55 @@ function App() {
         moderate: calculateAreaKm2(newPolygons.moderate),
         weak: calculateAreaKm2(newPolygons.weak),
       },
-      status: 'analyzed',
+      status: failedChunks > 0 ? 'degraded' : 'analyzed',
+      failedChunks,
     };
   }, [freq, gain, hRx, hTx, powerDbm]);
 
   const analyzeTerrain = useCallback(async () => {
+    if (isAnalyzingRef.current) return;
+
+    const sitesToAnalyze = sitesRef.current;
+    if (!sitesToAnalyze.length) {
+      setAnalysisNotice('Add at least one coverage site before running prediction.');
+      return;
+    }
+
+    isAnalyzingRef.current = true;
     setIsAnalyzing(true);
+    setAnalysisNotice(`Running terrain prediction for ${sitesToAnalyze.length} site${sitesToAnalyze.length > 1 ? 's' : ''}...`);
     setSites((currentSites) => currentSites.map((site) => ({ ...site, status: 'analyzing' })));
 
-    try {
-      const analyzed = [];
-      for (const site of sites) {
-        analyzed.push(await analyzeSite(site));
+    const analyzed = [];
+    let failedSites = 0;
+    let degradedSites = 0;
+
+    for (const site of sitesToAnalyze) {
+      try {
+        const result = await analyzeSite(site);
+        if (result.status === 'degraded') degradedSites += 1;
+        analyzed.push(result);
+      } catch (e) {
+        failedSites += 1;
+        console.error(`Coverage analysis failed for ${site.name}`, e);
+        analyzed.push({ ...site, status: 'failed' });
       }
-      setSites(analyzed);
-    } catch (e) {
-      console.error('Pro Analysis failed', e);
-      setSites((currentSites) => currentSites.map((site) => ({ ...site, status: 'failed' })));
-    } finally {
-      setIsAnalyzing(false);
-      setIsPanelOpen(false);
     }
-  }, [analyzeSite, sites]);
+
+    setSites(analyzed);
+
+    if (failedSites > 0) {
+      setAnalysisNotice(`${failedSites} site${failedSites > 1 ? 's' : ''} could not be predicted. Check connection and retry.`);
+    } else if (degradedSites > 0) {
+      setAnalysisNotice(`Prediction completed with fallback terrain for ${degradedSites} site${degradedSites > 1 ? 's' : ''}.`);
+    } else {
+      setAnalysisNotice('Coverage prediction completed.');
+    }
+
+    setIsAnalyzing(false);
+    isAnalyzingRef.current = false;
+    setIsPanelOpen(false);
+  }, [analyzeSite]);
 
   return (
     <div className="app-container">
@@ -468,11 +550,17 @@ function App() {
                 {isAnalyzing ? <div className="loading-spinner" style={{ width: '18px', height: '18px' }} /> : <Zap size={18} fill="white" />}
                 {isAnalyzing ? 'SCALING TERRAIN...' : `RUN ${sites.length}-SITE COVERAGE`}
               </button>
+              <div className={`analysis-notice ${analysisNotice.includes('could not') ? 'error' : analysisNotice.includes('fallback') ? 'warning' : ''}`}>
+                {analysisNotice}
+              </div>
             </div>
           </div>
 
           <div className="mobile-only">
             <p style={{ fontSize: '0.7rem', color: '#888', marginBottom: '15px', fontWeight: 'bold' }}>RF METRICS (km²)</p>
+            <div className={`analysis-notice ${analysisNotice.includes('could not') ? 'error' : analysisNotice.includes('fallback') ? 'warning' : ''}`}>
+              {analysisNotice}
+            </div>
             <div className="mobile-metrics">
               <div className="mobile-metric-card">
                 <span style={{ fontSize: '0.6rem', color: '#4dbd74', display: 'block' }}>STRONG</span>
@@ -502,7 +590,15 @@ function App() {
                 >
                   <span className="site-dot" />
                   <span>{site.name}</span>
-                  <small>{site.status === 'analyzing' ? 'scan' : `${site.areas.weak.toFixed(0)} km²`}</small>
+                  <small>
+                    {site.status === 'analyzing'
+                      ? 'scan'
+                      : site.status === 'failed'
+                        ? 'retry'
+                        : site.status === 'degraded'
+                          ? `${site.areas.weak.toFixed(0)} km² est.`
+                          : `${site.areas.weak.toFixed(0)} km²`}
+                  </small>
                 </button>
               ))}
             </div>
@@ -666,6 +762,27 @@ function App() {
           font-weight: 600;
           color: var(--text-secondary);
         }
+        .analysis-notice {
+          margin: -10px 0 18px;
+          padding: 9px 10px;
+          border-radius: 8px;
+          border: 1px solid rgba(255,255,255,0.1);
+          background: rgba(255,255,255,0.06);
+          color: var(--text-secondary);
+          font-size: 0.72rem;
+          line-height: 1.35;
+          font-weight: 700;
+        }
+        .analysis-notice.warning {
+          border-color: rgba(255, 193, 7, 0.35);
+          color: #ffd56a;
+          background: rgba(255, 193, 7, 0.1);
+        }
+        .analysis-notice.error {
+          border-color: rgba(255, 68, 68, 0.35);
+          color: #ff9b9b;
+          background: rgba(255, 68, 68, 0.1);
+        }
         .leaflet-control-layers {
           border: 1px solid rgba(255,255,255,0.18) !important;
           border-radius: 10px !important;
@@ -697,6 +814,9 @@ function App() {
           }
           .leaflet-top.leaflet-right .leaflet-control {
             margin-right: 10px;
+          }
+          .analysis-notice {
+            margin: 0 0 14px;
           }
         }
         .site-list {

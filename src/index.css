@@ -160,6 +160,10 @@ input[type="range"]::-webkit-slider-thumb {
   line-height: 1.35;
 }
 
+.stacked-select {
+  margin-top: 8px;
+}
+
 .numeric-input {
   width: 74px;
   min-height: 34px;
@@ -177,6 +181,92 @@ input[type="range"]::-webkit-slider-thumb {
 .numeric-input:focus {
   border-color: var(--accent-blue);
   box-shadow: 0 0 0 2px rgba(0, 163, 255, 0.2);
+}
+
+.engineering-group {
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  padding-top: 14px;
+}
+
+.engineering-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.engineering-grid label {
+  margin: 0;
+  font-size: 0.68rem;
+  line-height: 1.25;
+}
+
+.compact-input,
+.mini-select {
+  width: 100%;
+  margin-top: 5px;
+  text-align: left;
+}
+
+.mini-select {
+  min-height: 34px;
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 6px 8px;
+  outline: none;
+}
+
+.mini-select option {
+  background: #12141a;
+  color: var(--text-primary);
+}
+
+.engineering-summary {
+  margin-top: 8px;
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+  line-height: 1.35;
+  font-weight: 700;
+}
+
+.file-import-button {
+  min-height: 38px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary) !important;
+  cursor: pointer;
+  font-weight: 800;
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 8px !important;
+}
+
+.file-import-button input {
+  display: none;
+}
+
+.validation-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin: 10px 0;
+}
+
+.validation-stats span {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 7px 6px;
+  color: var(--text-secondary);
+  font-size: 0.64rem;
+  font-weight: 800;
+  text-align: center;
 }
 
 .value-badge {

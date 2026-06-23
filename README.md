@@ -45,6 +45,7 @@ This app uses Hata-style path loss plus sampled terrain/Fresnel obstruction, so 
 - Added combined coverage metrics across all active sites.
 - Added multiple base map layers while keeping standard OpenStreetMap as the default.
 - Improved the RF prediction model with receiver height, effective antenna height, HAAT, terrain clearance, and diffraction-style loss.
+- Added an engineering mode framework with selectable enhanced Hata or ITM-style hybrid planning, clutter profiles, feedline loss, receiver gain, noise figure, fade margin, directional antenna pattern settings, confidence estimates, measurement import, and validation report export.
 - Reworked the mobile and desktop layout for better browser compatibility.
 - Added PWA metadata and offline app-shell caching for install support on mobile and desktop browsers.
 - Fixed generated bundle linting by excluding deployed `docs/` output from ESLint.
@@ -75,12 +76,27 @@ The prediction does more than draw a simple radius circle. For each transmitter 
 The model responds to:
 
 - Mode profile, including FM voice, APRS/packet, SSB/weak signal, and LoRa SF7/SF9/SF12 presets.
+- Propagation model profile, including enhanced Hata plus terrain and an ITM-style hybrid approximation.
+- Clutter profile for open/rural, suburban, forest/foliage, and dense urban assumptions.
 - TX power from 0.1 W to 100 W.
 - Antenna gain in dBi.
+- Directional antenna azimuth, beamwidth, and front-to-back ratio.
+- Feedline loss, receiver antenna gain, receiver noise figure, required SNR, receiver bandwidth, and fade margin.
 - Receiver height above ground.
 - Frequency band and exact frequency.
 - Tower height above ground from 0 m to 100 m.
 - Site elevation and surrounding terrain.
+
+### Field Validation
+
+The app can import field measurements from CSV or GPX files and compare measured signal levels against predicted coverage zones. CSV files should include latitude, longitude, and signal columns such as:
+
+```text
+lat,lon,rssi
+3.1390,101.6869,-82
+```
+
+GPX imports read `trkpt` or `wpt` coordinates and look for signal values in extension fields named `rssi`, `signal`, `signal_dbm`, `dbm`, or `rx_dbm`. After import, the app shows validation markers on the map and can export a JSON validation report with model assumptions, prediction class, measured dBm, estimated predicted dBm, error, RMSE, median absolute error, and within-6/within-10 dB statistics.
 
 ### Map Layers
 
@@ -162,6 +178,19 @@ For each candidate distance, the app checks sampled terrain along the path:
 
 This creates shorter coverage in blocked directions and longer coverage in clearer directions.
 
+### 4b. Engineering Adjustments
+
+The v4.5 engineering framework extends the link budget with:
+
+```text
+usable budget = TX dBm + TX antenna gain + RX antenna gain
+                - feedline loss - fade margin - receiver threshold
+```
+
+Directional antennas reduce gain outside the selected beamwidth using a front-to-back-ratio approximation. Clutter profiles add practical environment loss and uncertainty. Receiver bandwidth, noise figure, and required SNR can raise the effective receiver threshold when the noise-limited threshold is higher than the mode preset.
+
+The ITM-style hybrid profile is not a full Longley-Rice implementation. It combines free-space path loss, Hata-style loss, terrain roughness, radio-horizon loss, and existing Fresnel/diffraction penalties to behave more conservatively over rough or beyond-horizon paths. It is included as a browser-friendly engineering approximation until a full ITM/Longley-Rice engine or service is connected.
+
 The first Fresnel zone radius is calculated in meters with frequency in MHz:
 
 ```text
@@ -221,6 +250,7 @@ What is considered reliable enough for planning:
 Known reliability limits:
 
 - Okumura-Hata is empirical. It is strongest for macro-style outdoor links, not indoor handheld operation or street-canyon/building-level prediction.
+- The ITM-style hybrid mode is an approximation inspired by Longley-Rice/ITM behavior, not a certified ITM implementation.
 - The original Hata model is normally bounded around 150-1500 MHz, base antenna heights around 30-200 m, mobile heights around 1-10 m, and moderate link distances. This app extends the idea for amateur planning across 30-3000 MHz and clamps antenna heights internally to keep the math stable.
 - The UHF/SHF extension is a practical approximation, not a full ITU-R P.1546, Longley-Rice/ITM, or ray-tracing implementation.
 - Terrain is sampled at fixed radial distances out to 64 km. Predictions beyond that distance still run, but distant terrain detail is less complete.

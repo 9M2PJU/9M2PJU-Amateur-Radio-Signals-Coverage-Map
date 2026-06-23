@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { MapContainer, TileLayer, Marker, useMapEvents, Popup, Polygon, LayersControl, ZoomControl } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, useMapEvents, Popup, Polygon, LayersControl, ZoomControl, CircleMarker } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
-import { Radio, Activity, Layers, Zap, Mountain, BarChart3, Plus, Trash2, Antenna, Info, X } from 'lucide-react';
+import { Radio, Activity, Layers, Zap, Mountain, BarChart3, Plus, Trash2, Antenna, Info, X, Upload, Download, FileText } from 'lucide-react';
 import L from 'leaflet';
 
 import icon from 'leaflet/dist/images/marker-icon.png';
@@ -60,6 +60,30 @@ const MODE_PROFILES = {
   },
 };
 const MODE_OPTIONS = Object.entries(MODE_PROFILES).map(([key, profile]) => ({ key, ...profile }));
+const PROPAGATION_MODELS = {
+  enhancedHata: {
+    label: 'Enhanced Hata + terrain',
+    note: 'Fast planning model with Hata-style loss and terrain diffraction.',
+  },
+  itmHybrid: {
+    label: 'ITM-style hybrid',
+    note: 'Adds terrain roughness, horizon, and free-space checks inspired by Longley-Rice/ITM behavior.',
+  },
+};
+const PROPAGATION_MODEL_OPTIONS = Object.entries(PROPAGATION_MODELS).map(([key, model]) => ({ key, ...model }));
+const CLUTTER_PROFILES = {
+  open: { label: 'Open / rural', lossDb: 0, uncertaintyDb: 6 },
+  suburban: { label: 'Suburban', lossDb: 6, uncertaintyDb: 8 },
+  forest: { label: 'Forest / foliage', lossDb: 12, uncertaintyDb: 10 },
+  urban: { label: 'Dense urban', lossDb: 18, uncertaintyDb: 12 },
+};
+const CLUTTER_OPTIONS = Object.entries(CLUTTER_PROFILES).map(([key, profile]) => ({ key, ...profile }));
+const BANDWIDTH_OPTIONS = [
+  { label: '12.5 kHz narrow FM', value: 12500 },
+  { label: '25 kHz FM', value: 25000 },
+  { label: '3 kHz SSB', value: 3000 },
+  { label: '125 kHz LoRa', value: 125000 },
+];
 const MAP_LAYERS = [
   {
     name: 'OpenStreetMap Standard',
@@ -191,6 +215,39 @@ const calculateAreaKm2 = (points) => {
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const formatPower = (value) => (value < 10 ? value.toFixed(1).replace(/\.0$/, '') : value.toFixed(0));
+const toNumber = (value, fallback = 0) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+const thermalNoiseDbm = (bandwidthHz, noiseFigureDb) => -174 + 10 * Math.log10(Math.max(1, bandwidthHz)) + noiseFigureDb;
+const calculateNoiseLimitedThreshold = (bandwidthHz, noiseFigureDb, requiredSnrDb) => (
+  thermalNoiseDbm(bandwidthHz, noiseFigureDb) + requiredSnrDb
+);
+
+const haversineDistanceKm = ([lat1, lon1], [lat2, lon2]) => {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+};
+
+const normalizeBearingDelta = (bearing, centerBearing) => {
+  const delta = Math.abs(((bearing - centerBearing + 540) % 360) - 180);
+  return delta;
+};
+
+const calculateAntennaPatternLoss = (bearing, antennaAzimuth, antennaBeamwidth, frontBackRatio) => {
+  if (antennaBeamwidth >= 360 || frontBackRatio <= 0) return 0;
+  const halfBeamwidth = Math.max(1, antennaBeamwidth / 2);
+  const delta = normalizeBearingDelta(bearing, antennaAzimuth);
+  if (delta <= halfBeamwidth) return 0;
+
+  const rearStart = 180 - halfBeamwidth;
+  if (delta >= rearStart) return frontBackRatio;
+  return clamp(((delta - halfBeamwidth) / Math.max(1, rearStart - halfBeamwidth)) * frontBackRatio, 0, frontBackRatio);
+};
 
 const calculatePathLoss = (freq, effectiveHTx, hRx, distanceKm) => {
   if (distanceKm <= 0.1) return 0;
@@ -207,6 +264,35 @@ const calculatePathLoss = (freq, effectiveHTx, hRx, distanceKm) => {
 
   return hataUrban - suburbanCorrection + cost231Extension;
 };
+
+const calculateFreeSpacePathLoss = (freq, distanceKm) => (
+  32.44 + 20 * Math.log10(Math.max(0.001, distanceKm)) + 20 * Math.log10(clamp(freq, 30, 3000))
+);
+
+const calculateTerrainRoughness = (radialSamples, siteElevation) => {
+  if (!radialSamples.length) return 0;
+  const elevations = radialSamples.map((sample) => sample.elevation);
+  const average = elevations.reduce((total, elevation) => total + elevation, 0) / elevations.length;
+  const variance = elevations.reduce((total, elevation) => total + ((elevation - average) ** 2), 0) / elevations.length;
+  const slope = Math.max(...elevations) - Math.min(...elevations);
+  const siteDelta = Math.max(0, average - siteElevation);
+  return Math.sqrt(variance) * 0.18 + slope * 0.035 + siteDelta * 0.05;
+};
+
+const calculateItmStylePathLoss = ({ freq, effectiveHTx, hRx, distanceKm, radialSamples, siteElevation }) => {
+  const fspl = calculateFreeSpacePathLoss(freq, distanceKm);
+  const hata = calculatePathLoss(freq, effectiveHTx, hRx, distanceKm);
+  const roughnessLoss = clamp(calculateTerrainRoughness(radialSamples, siteElevation), 0, 24);
+  const radioHorizonKm = 4.12 * (Math.sqrt(Math.max(1, effectiveHTx)) + Math.sqrt(Math.max(1, hRx)));
+  const horizonLoss = distanceKm > radioHorizonKm ? clamp((distanceKm - radioHorizonKm) * 0.38, 0, 28) : 0;
+  const transitionWeight = clamp((distanceKm - 8) / 40, 0, 1);
+
+  return Math.max(fspl + roughnessLoss + horizonLoss, (hata * (1 - transitionWeight)) + ((fspl + roughnessLoss + horizonLoss) * transitionWeight));
+};
+
+const calculateModeThreshold = (gradeThresholdDbm, bandwidthHz, noiseFigureDb, requiredSnrDb) => (
+  Math.max(gradeThresholdDbm, calculateNoiseLimitedThreshold(bandwidthHz, noiseFigureDb, requiredSnrDb))
+);
 
 const getElevationAtDistance = (radialSamples, distanceKm, fallbackElevation) => {
   let nearestElevation = fallbackElevation;
@@ -252,7 +338,15 @@ const calculateTerrainPenalty = (radialSamples, radiusKm, siteElevation, hTx, hR
   return clamp(maxDiffractionLoss + shadowedSamples * 1.5, 0, 38);
 };
 
-const findReliableDistance = ({ freq, effectiveHTx, hTx, hRx, targetLoss, radialSamples, siteElevation, terrainPenaltyCache }) => {
+const calculateModelPathLoss = ({ modelKey, freq, effectiveHTx, hRx, distanceKm, radialSamples, siteElevation }) => {
+  if (modelKey === 'itmHybrid') {
+    return calculateItmStylePathLoss({ freq, effectiveHTx, hRx, distanceKm, radialSamples, siteElevation });
+  }
+
+  return calculatePathLoss(freq, effectiveHTx, hRx, distanceKm);
+};
+
+const findReliableDistance = ({ modelKey, freq, effectiveHTx, hTx, hRx, targetLoss, radialSamples, siteElevation, clutterLossDb, terrainPenaltyCache }) => {
   let low = 0.1;
   let high = 120;
 
@@ -266,7 +360,9 @@ const findReliableDistance = ({ freq, effectiveHTx, hTx, hRx, targetLoss, radial
       terrainPenaltyCache?.set(cacheKey, terrainPenalty);
     }
 
-    const totalLoss = calculatePathLoss(freq, effectiveHTx, hRx, mid) + terrainPenalty;
+    const totalLoss = calculateModelPathLoss({ modelKey, freq, effectiveHTx, hRx, distanceKm: mid, radialSamples, siteElevation }) +
+      terrainPenalty +
+      clutterLossDb;
 
     if (totalLoss < targetLoss) low = mid;
     else high = mid;
@@ -379,6 +475,90 @@ const fetchElevationBatch = async (points) => {
   return { elevations, failedChunks };
 };
 
+const pointInPolygon = ([lat, lon], polygon) => {
+  if (!polygon || polygon.length < 3) return false;
+  let inside = false;
+
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const [latI, lonI] = polygon[i];
+    const [latJ, lonJ] = polygon[j];
+    const intersects = ((lonI > lon) !== (lonJ > lon)) &&
+      (lat < ((latJ - latI) * (lon - lonI)) / ((lonJ - lonI) || 1e-9) + latI);
+    if (intersects) inside = !inside;
+  }
+
+  return inside;
+};
+
+const parseCsvMeasurements = (text) => {
+  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (lines.length < 2) return [];
+  const headers = lines[0].split(',').map((header) => header.trim().toLowerCase());
+  const latIndex = headers.findIndex((header) => ['lat', 'latitude'].includes(header));
+  const lonIndex = headers.findIndex((header) => ['lon', 'lng', 'longitude'].includes(header));
+  const signalIndex = headers.findIndex((header) => ['rssi', 'signal', 'signal_dbm', 'dbm', 'rx_dbm'].includes(header));
+  if (latIndex < 0 || lonIndex < 0 || signalIndex < 0) return [];
+
+  return lines.slice(1).map((line, index) => {
+    const cells = line.split(',').map((cell) => cell.trim());
+    const lat = Number(cells[latIndex]);
+    const lon = Number(cells[lonIndex]);
+    const measuredDbm = Number(cells[signalIndex]);
+    if (![lat, lon, measuredDbm].every(Number.isFinite)) return null;
+    return {
+      id: `csv-${index}-${lat}-${lon}`,
+      source: 'CSV',
+      position: [lat, lon],
+      measuredDbm,
+    };
+  }).filter(Boolean);
+};
+
+const parseGpxMeasurements = (text) => {
+  const doc = new DOMParser().parseFromString(text, 'application/xml');
+  const parserError = doc.querySelector('parsererror');
+  if (parserError) return [];
+  const points = Array.from(doc.querySelectorAll('trkpt, wpt'));
+
+  return points.map((point, index) => {
+    const lat = Number(point.getAttribute('lat'));
+    const lon = Number(point.getAttribute('lon'));
+    const signalNode = Array.from(point.querySelectorAll('*')).find((node) => (
+      ['rssi', 'signal', 'signal_dbm', 'dbm', 'rx_dbm'].includes(node.localName.toLowerCase())
+    ));
+    const measuredDbm = Number(signalNode?.textContent);
+    if (![lat, lon, measuredDbm].every(Number.isFinite)) return null;
+    return {
+      id: `gpx-${index}-${lat}-${lon}`,
+      source: 'GPX',
+      position: [lat, lon],
+      measuredDbm,
+    };
+  }).filter(Boolean);
+};
+
+const summarizeErrors = (comparisons) => {
+  const valid = comparisons.filter((item) => Number.isFinite(item.errorDb));
+  if (!valid.length) {
+    return { count: 0, meanError: 0, rmse: 0, medianAbsError: 0, within6Db: 0, within10Db: 0 };
+  }
+
+  const errors = valid.map((item) => item.errorDb);
+  const absErrors = errors.map(Math.abs).sort((a, b) => a - b);
+  const meanError = errors.reduce((total, error) => total + error, 0) / errors.length;
+  const rmse = Math.sqrt(errors.reduce((total, error) => total + error ** 2, 0) / errors.length);
+  const medianAbsError = absErrors[Math.floor(absErrors.length / 2)];
+
+  return {
+    count: valid.length,
+    meanError,
+    rmse,
+    medianAbsError,
+    within6Db: valid.filter((item) => Math.abs(item.errorDb) <= 6).length / valid.length * 100,
+    within10Db: valid.filter((item) => Math.abs(item.errorDb) <= 10).length / valid.length * 100,
+  };
+};
+
 function MapClickHandler({ onClick }) {
   useMapEvents({
     click: (e) => onClick([e.latlng.lat, e.latlng.lng]),
@@ -397,6 +577,19 @@ function App() {
   const [gain, setGain] = useState(6);
   const [hRx, setHRx] = useState(1.5);
   const [modeKey, setModeKey] = useState('fm');
+  const [propagationModel, setPropagationModel] = useState('enhancedHata');
+  const [clutterKey, setClutterKey] = useState('suburban');
+  const [feedlineLoss, setFeedlineLoss] = useState(1);
+  const [rxAntennaGain, setRxAntennaGain] = useState(0);
+  const [noiseFigure, setNoiseFigure] = useState(6);
+  const [requiredSnr, setRequiredSnr] = useState(12);
+  const [receiverBandwidth, setReceiverBandwidth] = useState(12500);
+  const [fadeMargin, setFadeMargin] = useState(10);
+  const [antennaAzimuth, setAntennaAzimuth] = useState(0);
+  const [antennaBeamwidth, setAntennaBeamwidth] = useState(360);
+  const [frontBackRatio, setFrontBackRatio] = useState(0);
+  const [measurements, setMeasurements] = useState([]);
+  const [measurementNotice, setMeasurementNotice] = useState('Import CSV or GPX measurements for validation.');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isPanelOpen, setIsPanelOpen] = useState(false);
   const [isAboutOpen, setIsAboutOpen] = useState(false);
@@ -413,10 +606,12 @@ function App() {
   const activeSiteLat = activeSite?.position[0];
   const activeSiteLon = activeSite?.position[1];
   const modeProfile = MODE_PROFILES[modeKey] ?? MODE_PROFILES.fm;
+  const modelProfile = PROPAGATION_MODELS[propagationModel] ?? PROPAGATION_MODELS.enhancedHata;
+  const clutterProfile = CLUTTER_PROFILES[clutterKey] ?? CLUTTER_PROFILES.suburban;
   const serviceGrades = useMemo(() => GRADE_CONFIG.map((grade) => ({
     ...grade,
-    thresholdDbm: modeProfile.thresholds[grade.key],
-  })), [modeProfile]);
+    thresholdDbm: calculateModeThreshold(modeProfile.thresholds[grade.key], receiverBandwidth, noiseFigure, requiredSnr),
+  })), [modeProfile, noiseFigure, receiverBandwidth, requiredSnr]);
   const powerDbm = 10 * Math.log10(power * 1000);
   const combinedAreas = useMemo(() => sites.reduce((total, site) => ({
     strong: total.strong + site.areas.strong,
@@ -425,6 +620,85 @@ function App() {
   }), { ...EMPTY_AREAS }), [sites]);
 
   const analyzedSites = sites.filter((site) => site.coveragePolygons.weak).length;
+  const systemLossDb = feedlineLoss + fadeMargin;
+  const confidenceScore = clamp(
+    100 - clutterProfile.uncertaintyDb * 2 - fadeMargin * 0.7 - (propagationModel === 'itmHybrid' ? 4 : 9),
+    35,
+    95,
+  );
+  const validationReport = useMemo(() => {
+    const comparisons = measurements.map((measurement) => {
+      let bestMatch = null;
+
+      sites.forEach((site) => {
+        const gradeKey = ['strong', 'moderate', 'weak'].find((key) => pointInPolygon(measurement.position, site.coveragePolygons[key]));
+        const distanceKm = haversineDistanceKm(site.position, measurement.position);
+        if (!gradeKey && bestMatch) return;
+
+        const estimatedDbm = gradeKey
+          ? serviceGrades.find((grade) => grade.key === gradeKey)?.thresholdDbm + (gradeKey === 'strong' ? 8 : gradeKey === 'moderate' ? 5 : 2)
+          : modeProfile.thresholds.weak - 12;
+
+        if (!bestMatch || (gradeKey && !bestMatch.gradeKey) || distanceKm < bestMatch.distanceKm) {
+          bestMatch = {
+            siteId: site.id,
+            siteName: site.name,
+            gradeKey: gradeKey ?? 'outside',
+            distanceKm,
+            estimatedDbm,
+          };
+        }
+      });
+
+      const estimatedDbm = bestMatch?.estimatedDbm ?? modeProfile.thresholds.weak - 12;
+      return {
+        ...measurement,
+        predictedGrade: bestMatch?.gradeKey ?? 'outside',
+        predictedSite: bestMatch?.siteName ?? 'No analyzed site',
+        estimatedDbm,
+        errorDb: measurement.measuredDbm - estimatedDbm,
+      };
+    });
+
+    return {
+      generatedAt: new Date().toISOString(),
+      model: PROPAGATION_MODELS[propagationModel]?.label ?? propagationModel,
+      clutter: CLUTTER_PROFILES[clutterKey]?.label ?? clutterKey,
+      assumptions: {
+        propagationModel,
+        clutterKey,
+        feedlineLoss,
+        rxAntennaGain,
+        noiseFigure,
+        requiredSnr,
+        receiverBandwidth,
+        fadeMargin,
+        antennaAzimuth,
+        antennaBeamwidth,
+        frontBackRatio,
+        confidenceScore,
+      },
+      summary: summarizeErrors(comparisons),
+      comparisons,
+    };
+  }, [
+    antennaAzimuth,
+    antennaBeamwidth,
+    clutterKey,
+    confidenceScore,
+    fadeMargin,
+    feedlineLoss,
+    frontBackRatio,
+    measurements,
+    modeProfile.thresholds.weak,
+    noiseFigure,
+    propagationModel,
+    receiverBandwidth,
+    requiredSnr,
+    rxAntennaGain,
+    serviceGrades,
+    sites,
+  ]);
 
   useEffect(() => {
     sitesRef.current = sites;
@@ -501,6 +775,39 @@ function App() {
     });
   }, [activeSiteId, sites.length]);
 
+  const importMeasurements = useCallback(async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const text = await file.text();
+      const parsed = file.name.toLowerCase().endsWith('.gpx')
+        ? parseGpxMeasurements(text)
+        : parseCsvMeasurements(text);
+
+      setMeasurements(parsed);
+      setMeasurementNotice(parsed.length
+        ? `Imported ${parsed.length} measurement${parsed.length > 1 ? 's' : ''} from ${file.name}.`
+        : 'No usable measurements found. CSV needs lat, lon, and rssi/signal_dbm columns.');
+    } catch (error) {
+      setMeasurementNotice(`Measurement import failed: ${error.message}`);
+    } finally {
+      event.target.value = '';
+    }
+  }, []);
+
+  const downloadValidationReport = useCallback(() => {
+    const blob = new Blob([JSON.stringify(validationReport, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `9m2pju-validation-report-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  }, [validationReport]);
+
   const analyzeSite = useCallback(async (site) => {
     const terrainCacheKey = getTerrainProfileCacheKey(site.position);
     let terrainProfile = terrainProfileCacheRef.current.get(terrainCacheKey);
@@ -535,6 +842,7 @@ function App() {
     const { siteElevation, radialSampleSets, failedChunks } = terrainProfile;
     const haatSamples = [];
     const newPolygons = { strong: [], moderate: [], weak: [] };
+    const radialMargins = [];
 
     for (let radialIndex = 0; radialIndex < RADIALS_COUNT; radialIndex++) {
       const bearing = (radialIndex * 360) / RADIALS_COUNT;
@@ -545,10 +853,13 @@ function App() {
 
       const haat = (siteElevation + hTx) - avgElevation;
       const effectiveHTx = clamp(hTx + Math.max(0, haat), 2, 300);
+      const antennaPatternLoss = calculateAntennaPatternLoss(bearing, antennaAzimuth, antennaBeamwidth, frontBackRatio);
+      const directionalGain = gain - antennaPatternLoss;
 
       serviceGrades.forEach((grade) => {
-        const targetLoss = powerDbm + gain - grade.thresholdDbm;
+        const targetLoss = powerDbm + directionalGain + rxAntennaGain - systemLossDb - grade.thresholdDbm;
         const radius = findReliableDistance({
+          modelKey: propagationModel,
           freq,
           effectiveHTx,
           hTx,
@@ -556,18 +867,40 @@ function App() {
           targetLoss,
           radialSamples,
           siteElevation,
+          clutterLossDb: clutterProfile.lossDb,
           terrainPenaltyCache,
         });
         newPolygons[grade.key].push(getDestinationPoint(site.position[0], site.position[1], bearing, radius));
+
+        if (grade.key === 'weak') {
+          const pathLossAtRadius = calculateModelPathLoss({
+            modelKey: propagationModel,
+            freq,
+            effectiveHTx,
+            hRx,
+            distanceKm: radius,
+            radialSamples,
+            siteElevation,
+          });
+          const terrainPenalty = calculateTerrainPenalty(radialSamples, radius, siteElevation, hTx, hRx, freq);
+          radialMargins.push(targetLoss - pathLossAtRadius - terrainPenalty - clutterProfile.lossDb);
+        }
       });
     }
 
     const avgHaat = (siteElevation + hTx) - (haatSamples.reduce((total, elevation) => total + elevation, 0) / haatSamples.length);
+    const avgMarginDb = radialMargins.length
+      ? radialMargins.reduce((total, margin) => total + margin, 0) / radialMargins.length
+      : 0;
 
     return {
       ...site,
       elevation: siteElevation,
       haat: Math.max(2, avgHaat),
+      confidence: confidenceScore,
+      avgMarginDb,
+      model: propagationModel,
+      clutter: clutterKey,
       coveragePolygons: newPolygons,
       areas: {
         strong: calculateAreaKm2(newPolygons.strong),
@@ -577,7 +910,23 @@ function App() {
       status: failedChunks > 0 ? 'degraded' : 'analyzed',
       failedChunks,
     };
-  }, [freq, gain, hRx, hTx, powerDbm, serviceGrades]);
+  }, [
+    antennaAzimuth,
+    antennaBeamwidth,
+    clutterKey,
+    clutterProfile.lossDb,
+    confidenceScore,
+    freq,
+    frontBackRatio,
+    gain,
+    hRx,
+    hTx,
+    powerDbm,
+    propagationModel,
+    rxAntennaGain,
+    serviceGrades,
+    systemLossDb,
+  ]);
 
   const analyzeTerrain = useCallback(async () => {
     if (isAnalyzingRef.current) return;
@@ -825,6 +1174,70 @@ function App() {
             </div>
           </div>
 
+          <div className="control-group engineering-group">
+            <label><FileText size={12} style={{ marginRight: '6px' }} /> ENGINEERING MODEL</label>
+            <select className="mode-select" value={propagationModel} onChange={(e) => setPropagationModel(e.target.value)}>
+              {PROPAGATION_MODEL_OPTIONS.map((option) => (
+                <option key={option.key} value={option.key}>{option.label}</option>
+              ))}
+            </select>
+            <div className="mode-note">{modelProfile.note}</div>
+            <select className="mode-select stacked-select" value={clutterKey} onChange={(e) => setClutterKey(e.target.value)}>
+              {CLUTTER_OPTIONS.map((option) => (
+                <option key={option.key} value={option.key}>{option.label} (+{option.lossDb} dB)</option>
+              ))}
+            </select>
+            <div className="engineering-summary">
+              Confidence estimate: {confidenceScore.toFixed(0)}% · clutter uncertainty ±{clutterProfile.uncertaintyDb} dB
+            </div>
+          </div>
+
+          <div className="control-group engineering-group">
+            <label><Activity size={12} style={{ marginRight: '6px' }} /> LINK BUDGET</label>
+            <div className="engineering-grid">
+              <label>Feedline loss
+                <input className="numeric-input compact-input" type="number" min="0" max="20" step="0.1" value={feedlineLoss} onChange={(e) => setFeedlineLoss(clamp(toNumber(e.target.value), 0, 20))} />
+              </label>
+              <label>RX gain
+                <input className="numeric-input compact-input" type="number" min="-20" max="30" step="0.5" value={rxAntennaGain} onChange={(e) => setRxAntennaGain(clamp(toNumber(e.target.value), -20, 30))} />
+              </label>
+              <label>Fade margin
+                <input className="numeric-input compact-input" type="number" min="0" max="40" step="1" value={fadeMargin} onChange={(e) => setFadeMargin(clamp(toNumber(e.target.value), 0, 40))} />
+              </label>
+              <label>Noise figure
+                <input className="numeric-input compact-input" type="number" min="0" max="25" step="0.5" value={noiseFigure} onChange={(e) => setNoiseFigure(clamp(toNumber(e.target.value), 0, 25))} />
+              </label>
+              <label>Required SNR
+                <input className="numeric-input compact-input" type="number" min="-20" max="40" step="1" value={requiredSnr} onChange={(e) => setRequiredSnr(clamp(toNumber(e.target.value), -20, 40))} />
+              </label>
+              <label>Bandwidth
+                <select className="mini-select" value={receiverBandwidth} onChange={(e) => setReceiverBandwidth(Number(e.target.value))}>
+                  {BANDWIDTH_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <div className="engineering-summary">
+              Noise floor {thermalNoiseDbm(receiverBandwidth, noiseFigure).toFixed(1)} dBm · system loss {systemLossDb.toFixed(1)} dB
+            </div>
+          </div>
+
+          <div className="control-group engineering-group">
+            <label><Antenna size={12} style={{ marginRight: '6px' }} /> ANTENNA PATTERN</label>
+            <div className="engineering-grid">
+              <label>Azimuth
+                <input className="numeric-input compact-input" type="number" min="0" max="359" step="1" value={antennaAzimuth} onChange={(e) => setAntennaAzimuth(clamp(toNumber(e.target.value), 0, 359))} />
+              </label>
+              <label>Beamwidth
+                <input className="numeric-input compact-input" type="number" min="5" max="360" step="5" value={antennaBeamwidth} onChange={(e) => setAntennaBeamwidth(clamp(toNumber(e.target.value), 5, 360))} />
+              </label>
+              <label>F/B ratio
+                <input className="numeric-input compact-input" type="number" min="0" max="40" step="1" value={frontBackRatio} onChange={(e) => setFrontBackRatio(clamp(toNumber(e.target.value), 0, 40))} />
+              </label>
+            </div>
+          </div>
+
           <div className="control-group">
             <label style={{ fontSize: '0.7rem', color: '#888', display: 'block', marginBottom: '10px' }}><Radio size={12} /> BAND SELECTOR</label>
             <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
@@ -868,16 +1281,33 @@ function App() {
             <p style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', marginBottom: '10px', letterSpacing: '1px' }}>PREDICTED ZONES</p>
             <div className="pro-legend-item">
               <div style={{ width: 10, height: 10, background: '#4dbd74', border: '1px solid white' }}></div>
-              <span>Strong signal &gt; {modeProfile.thresholds.strong} dBm</span>
+              <span>Strong signal &gt; {serviceGrades.find((grade) => grade.key === 'strong')?.thresholdDbm.toFixed(0)} dBm</span>
             </div>
             <div className="pro-legend-item">
               <div style={{ width: 10, height: 10, background: '#ffc107', border: '1px solid white' }}></div>
-              <span>Moderate signal &gt; {modeProfile.thresholds.moderate} dBm</span>
+              <span>Moderate signal &gt; {serviceGrades.find((grade) => grade.key === 'moderate')?.thresholdDbm.toFixed(0)} dBm</span>
             </div>
             <div className="pro-legend-item">
               <div style={{ width: 10, height: 10, background: '#ff4444', border: '1px solid white' }}></div>
-              <span>Fringe signal &gt; {modeProfile.thresholds.weak} dBm</span>
+              <span>Fringe signal &gt; {serviceGrades.find((grade) => grade.key === 'weak')?.thresholdDbm.toFixed(0)} dBm</span>
             </div>
+          </div>
+
+          <div className="control-group engineering-group validation-group">
+            <label><Upload size={12} style={{ marginRight: '6px' }} /> FIELD VALIDATION</label>
+            <label className="file-import-button">
+              <Upload size={14} /> Import CSV / GPX
+              <input type="file" accept=".csv,.gpx,text/csv,application/gpx+xml" onChange={importMeasurements} />
+            </label>
+            <div className="engineering-summary">{measurementNotice}</div>
+            <div className="validation-stats">
+              <span>Samples: {validationReport.summary.count}</span>
+              <span>RMSE: {validationReport.summary.rmse.toFixed(1)} dB</span>
+              <span>Within 10 dB: {validationReport.summary.within10Db.toFixed(0)}%</span>
+            </div>
+            <button className="secondary-button" type="button" onClick={downloadValidationReport} disabled={!measurements.length}>
+              <Download size={14} /> Download validation report
+            </button>
           </div>
         </div>
       </div>
@@ -947,11 +1377,36 @@ function App() {
                 <strong style={{ fontSize: '0.9rem' }}>{site.name.toUpperCase()} TRANSMITTER</strong><br />
                 Lat/Lon: {site.position[0].toFixed(4)}, {site.position[1].toFixed(4)}<br />
                 Elev: {site.elevation}m AMSL | HAAT: {site.haat.toFixed(1)}m<br />
-                Fringe: {site.areas.weak.toFixed(0)} km²
+                Fringe: {site.areas.weak.toFixed(0)} km²<br />
+                Model: {PROPAGATION_MODELS[site.model]?.label ?? modelProfile.label}<br />
+                Confidence: {(site.confidence ?? confidenceScore).toFixed(0)}% | Avg margin: {(site.avgMarginDb ?? 0).toFixed(1)} dB
               </div>
             </Popup>
           </Marker>
         ))}
+
+        {validationReport.comparisons.map((measurement) => {
+          const absError = Math.abs(measurement.errorDb);
+          const color = absError <= 6 ? '#4dbd74' : absError <= 10 ? '#ffc107' : '#ff4444';
+          return (
+            <CircleMarker
+              key={measurement.id}
+              center={measurement.position}
+              radius={6}
+              pathOptions={{ color, fillColor: color, fillOpacity: 0.78, weight: 2 }}
+            >
+              <Popup>
+                <div style={{ color: '#000', fontSize: '0.8rem' }}>
+                  <strong>FIELD MEASUREMENT</strong><br />
+                  Measured: {measurement.measuredDbm.toFixed(1)} dBm<br />
+                  Predicted: {measurement.estimatedDbm.toFixed(1)} dBm ({measurement.predictedGrade})<br />
+                  Error: {measurement.errorDb.toFixed(1)} dB<br />
+                  Site: {measurement.predictedSite}
+                </div>
+              </Popup>
+            </CircleMarker>
+          );
+        })}
       </MapContainer>
 
       {isAboutOpen && (

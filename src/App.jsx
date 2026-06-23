@@ -962,7 +962,7 @@ function App() {
             </button>
             <h2 id="about-title">About</h2>
             <p>
-              It uses Hata-style path loss plus sampled terrain/Fresnel obstruction, so it should give useful approximate coverage zones, but real-world results can differ due to buildings, foliage, antenna pattern, local noise, receiver quality, weather, and terrain data accuracy.
+              This app uses Hata-style path loss plus sampled terrain/Fresnel obstruction, so it should give useful approximate coverage zones, but real-world results can differ due to buildings, foliage, antenna pattern, local noise, receiver quality, weather, and terrain data accuracy.
             </p>
             <p className="about-credit">
               Made by <a href="https://hamradio.my" target="_blank" rel="noreferrer">9M2PJU</a>

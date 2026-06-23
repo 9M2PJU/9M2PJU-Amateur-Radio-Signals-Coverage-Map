@@ -1422,6 +1422,9 @@ function App() {
             <p>
               In simple words: use this app for planning and estimating coverage, not as certified RF engineering truth. The prediction becomes more reliable when you compare it with real field measurements and adjust the settings.
             </p>
+            <p>
+              You can import CSV or GPX field measurements to compare real signal readings with the predicted coverage and download a validation report.
+            </p>
             <p className="about-credit">
               Made by <a href="https://hamradio.my" target="_blank" rel="noreferrer">9M2PJU</a>
             </p>

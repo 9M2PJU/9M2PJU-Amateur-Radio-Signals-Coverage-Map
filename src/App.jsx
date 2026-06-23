@@ -1419,6 +1419,9 @@ function App() {
             <p>
               This app uses Hata-style path loss plus sampled terrain/Fresnel obstruction, so it should give useful approximate coverage zones, but real-world results can differ due to buildings, foliage, antenna pattern, local noise, receiver quality, weather, and terrain data accuracy.
             </p>
+            <p>
+              In simple words: use this app for planning and estimating coverage, not as certified RF engineering truth. The prediction becomes more reliable when you compare it with real field measurements and adjust the settings.
+            </p>
             <p className="about-credit">
               Made by <a href="https://hamradio.my" target="_blank" rel="noreferrer">9M2PJU</a>
             </p>

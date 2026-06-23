@@ -1425,6 +1425,51 @@ function App() {
             <p>
               You can import CSV or GPX field measurements to compare real signal readings with the predicted coverage and download a validation report.
             </p>
+            <h3>How to use</h3>
+            <ol className="about-list">
+              <li>Add or select a coverage site, then click the map to place it.</li>
+              <li>Set TX power, antenna gain, frequency, tower height, and RX height.</li>
+              <li>Choose the mode profile, engineering model, clutter type, and link budget values.</li>
+              <li>Press Run Coverage to draw strong, moderate, and fringe coverage zones.</li>
+              <li>Import CSV or GPX field readings to check how close the prediction is to real signals.</li>
+            </ol>
+            <h3>Settings</h3>
+            <dl className="about-settings">
+              <dt>Coverage sites</dt>
+              <dd>Transmitter locations. Add more sites when several repeaters or stations share coverage.</dd>
+              <dt>TX power</dt>
+              <dd>Power from the transmitter in watts before antenna and cable effects.</dd>
+              <dt>Antenna gain</dt>
+              <dd>Transmit antenna gain in dBi. Higher gain can extend coverage in the antenna direction.</dd>
+              <dt>RX height</dt>
+              <dd>Receiver antenna height above ground, such as handheld, mobile, or home antenna height.</dd>
+              <dt>Mode profile</dt>
+              <dd>Radio mode and signal threshold profile, for example FM voice, APRS, or weak-signal modes.</dd>
+              <dt>Engineering model</dt>
+              <dd>Prediction method. Enhanced Hata is fast; ITM-style hybrid is more conservative over rough terrain.</dd>
+              <dt>Clutter</dt>
+              <dd>Extra loss for the environment, such as open land, suburban, forest, or dense urban areas.</dd>
+              <dt>Feedline loss</dt>
+              <dd>Signal lost in coax, connectors, duplexer, filters, or other hardware before the antenna.</dd>
+              <dt>RX gain</dt>
+              <dd>Receiver antenna gain. Use negative values for poor antennas or body/vehicle loss.</dd>
+              <dt>Fade margin</dt>
+              <dd>Extra safety margin in dB for fading, weather, movement, and real-world uncertainty.</dd>
+              <dt>Noise figure</dt>
+              <dd>Receiver noise performance. Lower is better; higher values need stronger signals.</dd>
+              <dt>Required SNR</dt>
+              <dd>Signal-to-noise ratio needed for usable copy. Higher SNR means smaller predicted coverage.</dd>
+              <dt>Bandwidth</dt>
+              <dd>Receiver bandwidth. Wider bandwidth raises noise floor and may need stronger signal.</dd>
+              <dt>Antenna pattern</dt>
+              <dd>Azimuth points the antenna, beamwidth sets its main lobe width, and F/B ratio reduces back-side coverage.</dd>
+              <dt>Frequency</dt>
+              <dd>Operating frequency in MHz. VHF/UHF/SHF behave differently over distance and terrain.</dd>
+              <dt>Tower height</dt>
+              <dd>Transmitter antenna height above ground. More height usually improves line-of-sight coverage.</dd>
+              <dt>Field validation</dt>
+              <dd>Import measured signal points to compare predicted and real results, then export a report.</dd>
+            </dl>
             <p className="about-credit">
               Made by <a href="https://hamradio.my" target="_blank" rel="noreferrer">9M2PJU</a>
             </p>
@@ -1527,7 +1572,9 @@ function App() {
         }
         .about-modal {
           position: relative;
-          width: min(460px, calc(100vw - 40px));
+          width: min(680px, calc(100vw - 40px));
+          max-height: min(86vh, 760px);
+          overflow-y: auto;
           padding: 24px;
           color: var(--text-primary);
         }
@@ -1542,6 +1589,43 @@ function App() {
           color: var(--text-secondary);
           font-size: 0.86rem;
           line-height: 1.55;
+          font-weight: 650;
+        }
+        .about-modal h3 {
+          margin: 18px 0 8px;
+          color: var(--text-primary);
+          font-size: 0.82rem;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: 0.08em;
+        }
+        .about-list {
+          margin: 0;
+          padding-left: 20px;
+          color: var(--text-secondary);
+          font-size: 0.82rem;
+          line-height: 1.45;
+          font-weight: 650;
+        }
+        .about-list li {
+          margin: 5px 0;
+        }
+        .about-settings {
+          display: grid;
+          grid-template-columns: minmax(120px, 0.36fr) 1fr;
+          gap: 8px 14px;
+          margin: 0;
+        }
+        .about-settings dt {
+          color: var(--text-primary);
+          font-size: 0.78rem;
+          font-weight: 900;
+        }
+        .about-settings dd {
+          margin: 0;
+          color: var(--text-secondary);
+          font-size: 0.78rem;
+          line-height: 1.4;
           font-weight: 650;
         }
         .about-modal .about-credit {
@@ -1619,6 +1703,13 @@ function App() {
           }
           .about-modal {
             padding: 22px;
+          }
+          .about-settings {
+            grid-template-columns: 1fr;
+            gap: 3px;
+          }
+          .about-settings dd {
+            margin-bottom: 9px;
           }
         }
         .site-list {

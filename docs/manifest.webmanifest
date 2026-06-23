@@ -1,0 +1,41 @@
+{
+  "name": "9M2PJU Coverage Prediction",
+  "short_name": "9M2PJU Coverage",
+  "description": "Multi-site terrain-aware RF coverage prediction for amateur radio operators.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#07131f",
+  "theme_color": "#07131f",
+  "categories": ["utilities", "navigation", "productivity"],
+  "icons": [
+    {
+      "src": "/brand_logo_v6.png",
+      "sizes": "1024x1024",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/favicon.ico",
+      "sizes": "500x500",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Open coverage map",
+      "short_name": "Coverage Map",
+      "description": "Launch the RF coverage prediction dashboard.",
+      "url": "/",
+      "icons": [
+        {
+          "src": "/brand_logo_v6.png",
+          "sizes": "1024x1024",
+          "type": "image/png"
+        }
+      ]
+    }
+  ]
+}

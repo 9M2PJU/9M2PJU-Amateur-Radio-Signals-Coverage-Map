@@ -44,6 +44,7 @@ The app is designed for fast field planning: choose a transmitter location, adju
 - Added multiple base map layers while keeping standard OpenStreetMap as the default.
 - Improved the RF prediction model with receiver height, effective antenna height, HAAT, terrain clearance, and diffraction-style loss.
 - Reworked the mobile and desktop layout for better browser compatibility.
+- Added PWA metadata and offline app-shell caching for install support on mobile and desktop browsers.
 - Fixed generated bundle linting by excluding deployed `docs/` output from ESLint.
 - Updated project metadata to version `4.3.0`.
 

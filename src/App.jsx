@@ -103,6 +103,46 @@ const ELEVATION_ENDPOINT = 'https://api.open-elevation.com/api/v1/lookup';
 const ELEVATION_CHUNK_SIZE = 60;
 const ELEVATION_TIMEOUT_MS = 12000;
 const ELEVATION_RETRIES = 2;
+const ELEVATION_CONCURRENCY = 4;
+const PREDICTION_SEARCH_ITERATIONS = 18;
+const ELEVATION_CACHE_STORAGE_KEY = '9m2pju-elevation-cache-v1';
+const ELEVATION_CACHE_MAX_ENTRIES = 2500;
+
+const loadElevationCache = () => {
+  if (typeof window === 'undefined') return new Map();
+  try {
+    const rawCache = window.localStorage.getItem(ELEVATION_CACHE_STORAGE_KEY);
+    const entries = rawCache ? JSON.parse(rawCache) : [];
+    return new Map(Array.isArray(entries) ? entries : []);
+  } catch {
+    return new Map();
+  }
+};
+
+const elevationCache = loadElevationCache();
+let elevationCacheWriteTimer = null;
+
+const normalizeCoordinate = (value) => Number(value).toFixed(5);
+const getElevationCacheKey = ([lat, lon]) => `${normalizeCoordinate(lat)},${normalizeCoordinate(lon)}`;
+const getTerrainProfileCacheKey = ([lat, lon]) => [
+  normalizeCoordinate(lat),
+  normalizeCoordinate(lon),
+  RADIALS_COUNT,
+  SAMPLING_INTERVALS_KM.join('-'),
+].join('|');
+
+const persistElevationCache = () => {
+  if (typeof window === 'undefined') return;
+  window.clearTimeout(elevationCacheWriteTimer);
+  elevationCacheWriteTimer = window.setTimeout(() => {
+    const entries = Array.from(elevationCache.entries()).slice(-ELEVATION_CACHE_MAX_ENTRIES);
+    try {
+      window.localStorage.setItem(ELEVATION_CACHE_STORAGE_KEY, JSON.stringify(entries));
+    } catch {
+      // Cache persistence is best-effort; prediction should still run if storage is full.
+    }
+  }, 300);
+};
 
 const createSite = (id, position, color) => ({
   id,
@@ -169,18 +209,17 @@ const calculatePathLoss = (freq, effectiveHTx, hRx, distanceKm) => {
 };
 
 const getElevationAtDistance = (radialSamples, distanceKm, fallbackElevation) => {
-  const nearest = radialSamples.reduce((best, sample) => {
-    if (sample.distanceKm > distanceKm) return best;
-    if (!best || sample.distanceKm > best.distanceKm) return sample;
-    return best;
-  }, null);
-  return nearest?.elevation ?? fallbackElevation;
+  let nearestElevation = fallbackElevation;
+
+  for (const sample of radialSamples) {
+    if (sample.distanceKm > distanceKm) break;
+    nearestElevation = sample.elevation;
+  }
+
+  return nearestElevation;
 };
 
 const calculateTerrainPenalty = (radialSamples, radiusKm, siteElevation, hTx, hRx, freq) => {
-  const samplesInPath = radialSamples.filter((sample) => sample.distanceKm > 0 && sample.distanceKm < radiusKm);
-  if (!samplesInPath.length) return 0;
-
   const wavelength = 300 / freq;
   const txAmsl = siteElevation + hTx;
   const rxGround = getElevationAtDistance(radialSamples, radiusKm, siteElevation);
@@ -189,13 +228,16 @@ const calculateTerrainPenalty = (radialSamples, radiusKm, siteElevation, hTx, hR
   let maxDiffractionLoss = 0;
   let shadowedSamples = 0;
 
-  samplesInPath.forEach((sample) => {
+  for (const sample of radialSamples) {
+    if (sample.distanceKm <= 0) continue;
+    if (sample.distanceKm >= radiusKm) break;
+
     const pathFraction = sample.distanceKm / radiusKm;
     const lineOfSightHeight = txAmsl + (rxAmsl - txAmsl) * pathFraction;
     const firstFresnelRadius = 548 * Math.sqrt((sample.distanceKm * (radiusKm - sample.distanceKm)) / (freq * radiusKm));
     const clearanceDeficit = sample.elevation - (lineOfSightHeight - 0.6 * firstFresnelRadius);
 
-    if (clearanceDeficit <= 0) return;
+    if (clearanceDeficit <= 0) continue;
 
     shadowedSamples += 1;
     const d1 = Math.max(1, sample.distanceKm * 1000);
@@ -203,19 +245,28 @@ const calculateTerrainPenalty = (radialSamples, radiusKm, siteElevation, hTx, hR
     const v = clearanceDeficit * Math.sqrt((2 * (d1 + d2)) / (wavelength * d1 * d2));
     const diffractionLoss = v <= -0.78 ? 0 : 6.9 + 20 * Math.log10(Math.sqrt((v - 0.1) ** 2 + 1) + v - 0.1);
     maxDiffractionLoss = Math.max(maxDiffractionLoss, diffractionLoss);
-  });
+  }
+
+  if (shadowedSamples === 0) return 0;
 
   return clamp(maxDiffractionLoss + shadowedSamples * 1.5, 0, 38);
 };
 
-const findReliableDistance = ({ freq, effectiveHTx, hTx, hRx, targetLoss, radialSamples, siteElevation }) => {
+const findReliableDistance = ({ freq, effectiveHTx, hTx, hRx, targetLoss, radialSamples, siteElevation, terrainPenaltyCache }) => {
   let low = 0.1;
   let high = 120;
 
-  for (let i = 0; i < 24; i++) {
+  for (let i = 0; i < PREDICTION_SEARCH_ITERATIONS; i++) {
     const mid = (low + high) / 2;
-    const totalLoss = calculatePathLoss(freq, effectiveHTx, hRx, mid) +
-      calculateTerrainPenalty(radialSamples, mid, siteElevation, hTx, hRx, freq);
+    const cacheKey = mid.toFixed(3);
+    let terrainPenalty = terrainPenaltyCache?.get(cacheKey);
+
+    if (typeof terrainPenalty !== 'number') {
+      terrainPenalty = calculateTerrainPenalty(radialSamples, mid, siteElevation, hTx, hRx, freq);
+      terrainPenaltyCache?.set(cacheKey, terrainPenalty);
+    }
+
+    const totalLoss = calculatePathLoss(freq, effectiveHTx, hRx, mid) + terrainPenalty;
 
     if (totalLoss < targetLoss) low = mid;
     else high = mid;
@@ -274,14 +325,55 @@ const fetchElevationChunk = async (chunk) => {
 };
 
 const fetchElevationBatch = async (points) => {
-  const elevations = [];
+  const elevations = Array(points.length);
+  const uncachedRequests = [];
   let failedChunks = 0;
 
-  for (let start = 0; start < points.length; start += ELEVATION_CHUNK_SIZE) {
-    const chunk = points.slice(start, start + ELEVATION_CHUNK_SIZE);
-    const result = await fetchElevationChunk(chunk);
-    elevations.push(...result.elevations);
+  points.forEach((point, index) => {
+    const cacheKey = getElevationCacheKey(point);
+    const cachedElevation = elevationCache.get(cacheKey);
+
+    if (typeof cachedElevation === 'number') {
+      elevations[index] = cachedElevation;
+      return;
+    }
+
+    uncachedRequests.push({ point, index, cacheKey });
+  });
+
+  const chunks = [];
+  for (let start = 0; start < uncachedRequests.length; start += ELEVATION_CHUNK_SIZE) {
+    chunks.push(uncachedRequests.slice(start, start + ELEVATION_CHUNK_SIZE));
+  }
+
+  let nextChunkIndex = 0;
+  const runNextChunk = async () => {
+    const chunkIndex = nextChunkIndex;
+    nextChunkIndex += 1;
+    const requestChunk = chunks[chunkIndex];
+    if (!requestChunk) return;
+
+    const result = await fetchElevationChunk(requestChunk.map(({ point }) => point));
     if (result.failed) failedChunks += 1;
+
+    result.elevations.forEach((elevation, elevationIndex) => {
+      const request = requestChunk[elevationIndex];
+      elevations[request.index] = elevation;
+      if (typeof elevation === 'number') {
+        elevationCache.set(request.cacheKey, elevation);
+      }
+    });
+
+    await runNextChunk();
+  };
+
+  if (chunks.length > 0) {
+    const workers = Array.from(
+      { length: Math.min(ELEVATION_CONCURRENCY, chunks.length) },
+      () => runNextChunk(),
+    );
+    await Promise.all(workers);
+    persistElevationCache();
   }
 
   return { elevations, failedChunks };
@@ -312,6 +404,7 @@ function App() {
   const [analysisNotice, setAnalysisNotice] = useState('Ready for coverage prediction.');
   const isAnalyzingRef = useRef(false);
   const sitesRef = useRef(sites);
+  const terrainProfileCacheRef = useRef(new Map());
 
   const activeSite = sites.find((site) => site.id === activeSiteId) ?? sites[0];
   const mapCenter = activeSite?.position ?? [3.1390, 101.6869];
@@ -408,28 +501,44 @@ function App() {
   }, [activeSiteId, sites.length]);
 
   const analyzeSite = useCallback(async (site) => {
-    const radialPoints = [];
+    const terrainCacheKey = getTerrainProfileCacheKey(site.position);
+    let terrainProfile = terrainProfileCacheRef.current.get(terrainCacheKey);
 
-    for (let i = 0; i < RADIALS_COUNT; i++) {
-      const bearing = (i * 360) / RADIALS_COUNT;
-      SAMPLING_INTERVALS_KM.forEach((distanceKm) => {
-        radialPoints.push(getDestinationPoint(site.position[0], site.position[1], bearing, distanceKm));
-      });
+    if (!terrainProfile) {
+      const radialPoints = [];
+
+      for (let i = 0; i < RADIALS_COUNT; i++) {
+        const bearing = (i * 360) / RADIALS_COUNT;
+        SAMPLING_INTERVALS_KM.forEach((distanceKm) => {
+          radialPoints.push(getDestinationPoint(site.position[0], site.position[1], bearing, distanceKm));
+        });
+      }
+
+      const { elevations, failedChunks } = await fetchElevationBatch([site.position, ...radialPoints]);
+      const siteElevation = elevations[0] ?? site.elevation;
+      const radialElevations = elevations.slice(1);
+      const radialSampleSets = [];
+
+      for (let radialIndex = 0; radialIndex < RADIALS_COUNT; radialIndex++) {
+        const offset = radialIndex * SAMPLING_INTERVALS_KM.length;
+        radialSampleSets.push(SAMPLING_INTERVALS_KM.map((distanceKm, sampleIndex) => ({
+          distanceKm,
+          elevation: radialElevations[offset + sampleIndex] ?? siteElevation,
+        })));
+      }
+
+      terrainProfile = { siteElevation, radialSampleSets, failedChunks };
+      terrainProfileCacheRef.current.set(terrainCacheKey, terrainProfile);
     }
 
-    const { elevations, failedChunks } = await fetchElevationBatch([site.position, ...radialPoints]);
-    const siteElevation = elevations[0] ?? site.elevation;
-    const radialElevations = elevations.slice(1);
+    const { siteElevation, radialSampleSets, failedChunks } = terrainProfile;
     const haatSamples = [];
     const newPolygons = { strong: [], moderate: [], weak: [] };
 
     for (let radialIndex = 0; radialIndex < RADIALS_COUNT; radialIndex++) {
       const bearing = (radialIndex * 360) / RADIALS_COUNT;
-      const offset = radialIndex * SAMPLING_INTERVALS_KM.length;
-      const radialSamples = SAMPLING_INTERVALS_KM.map((distanceKm, sampleIndex) => ({
-        distanceKm,
-        elevation: radialElevations[offset + sampleIndex] ?? siteElevation,
-      }));
+      const radialSamples = radialSampleSets[radialIndex];
+      const terrainPenaltyCache = new Map();
       const avgElevation = radialSamples.reduce((total, sample) => total + sample.elevation, 0) / radialSamples.length;
       haatSamples.push(avgElevation);
 
@@ -446,6 +555,7 @@ function App() {
           targetLoss,
           radialSamples,
           siteElevation,
+          terrainPenaltyCache,
         });
         newPolygons[grade.key].push(getDestinationPoint(site.position[0], site.position[1], bearing, radius));
       });
@@ -482,21 +592,18 @@ function App() {
     setAnalysisNotice(`Running terrain prediction for ${sitesToAnalyze.length} site${sitesToAnalyze.length > 1 ? 's' : ''}...`);
     setSites((currentSites) => currentSites.map((site) => ({ ...site, status: 'analyzing' })));
 
-    const analyzed = [];
-    let failedSites = 0;
-    let degradedSites = 0;
-
-    for (const site of sitesToAnalyze) {
+    const analyzed = await Promise.all(sitesToAnalyze.map(async (site) => {
       try {
         const result = await analyzeSite(site);
-        if (result.status === 'degraded') degradedSites += 1;
-        analyzed.push(result);
+        return result;
       } catch (e) {
-        failedSites += 1;
         console.error(`Coverage analysis failed for ${site.name}`, e);
-        analyzed.push({ ...site, status: 'failed' });
+        return { ...site, status: 'failed' };
       }
-    }
+    }));
+
+    const failedSites = analyzed.filter((site) => site.status === 'failed').length;
+    const degradedSites = analyzed.filter((site) => site.status === 'degraded').length;
 
     setSites(analyzed);
 

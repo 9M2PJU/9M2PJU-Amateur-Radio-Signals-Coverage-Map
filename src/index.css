@@ -130,6 +130,55 @@ input[type="range"]::-webkit-slider-thumb {
   cursor: pointer;
 }
 
+.mode-select {
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  font-weight: 700;
+  padding: 8px 10px;
+  outline: none;
+}
+
+.mode-select:focus {
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 2px rgba(0, 163, 255, 0.2);
+}
+
+.mode-select option {
+  background: #12141a;
+  color: var(--text-primary);
+}
+
+.mode-note {
+  margin-top: 8px;
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+  line-height: 1.35;
+}
+
+.numeric-input {
+  width: 74px;
+  min-height: 34px;
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+  font-size: 0.82rem;
+  font-weight: 700;
+  padding: 6px 8px;
+  text-align: right;
+  outline: none;
+}
+
+.numeric-input:focus {
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 2px rgba(0, 163, 255, 0.2);
+}
+
 .value-badge {
   font-size: 0.85rem;
   font-weight: 600;

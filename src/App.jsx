@@ -17,10 +17,49 @@ L.Marker.prototype.options.icon = DefaultIcon;
 
 const SITE_COLORS = ['#00a3ff', '#b450ff', '#00b894', '#ff7a45'];
 const GRADE_CONFIG = [
-  { key: 'weak', label: 'Fringe', color: '#ff4444', thresholdDbm: -115, fillOpacity: 0.08, weight: 1, dashArray: '3, 3' },
-  { key: 'moderate', label: 'Moderate', color: '#ffc107', thresholdDbm: -105, fillOpacity: 0.16, weight: 1 },
-  { key: 'strong', label: 'Strong', color: '#4dbd74', thresholdDbm: -93, fillOpacity: 0.28, weight: 2 },
+  { key: 'weak', label: 'Fringe', color: '#ff4444', fillOpacity: 0.08, weight: 1, dashArray: '3, 3' },
+  { key: 'moderate', label: 'Moderate', color: '#ffc107', fillOpacity: 0.16, weight: 1 },
+  { key: 'strong', label: 'Strong', color: '#4dbd74', fillOpacity: 0.28, weight: 2 },
 ];
+const MODE_PROFILES = {
+  fm: {
+    label: 'FM Voice',
+    defaultFreq: 145,
+    thresholds: { strong: -93, moderate: -105, weak: -115 },
+    note: 'Analog voice planning thresholds',
+  },
+  packet: {
+    label: 'APRS / Packet',
+    defaultFreq: 144.39,
+    thresholds: { strong: -100, moderate: -108, weak: -116 },
+    note: '1200 baud AFSK-style packet planning',
+  },
+  ssb: {
+    label: 'SSB / Weak Signal',
+    defaultFreq: 144.2,
+    thresholds: { strong: -105, moderate: -115, weak: -123 },
+    note: 'Weak-signal receiver sensitivity profile',
+  },
+  loraSf7: {
+    label: 'LoRa SF7 125k',
+    defaultFreq: 433,
+    thresholds: { strong: -103, moderate: -113, weak: -123 },
+    note: 'LoRa short airtime, lower sensitivity',
+  },
+  loraSf9: {
+    label: 'LoRa SF9 125k',
+    defaultFreq: 433,
+    thresholds: { strong: -109, moderate: -119, weak: -129 },
+    note: 'Balanced LoRa link profile',
+  },
+  loraSf12: {
+    label: 'LoRa SF12 125k',
+    defaultFreq: 433,
+    thresholds: { strong: -117, moderate: -127, weak: -137 },
+    note: 'LoRa longest-range sensitivity profile',
+  },
+};
+const MODE_OPTIONS = Object.entries(MODE_PROFILES).map(([key, profile]) => ({ key, ...profile }));
 const MAP_LAYERS = [
   {
     name: 'OpenStreetMap Standard',
@@ -111,6 +150,7 @@ const calculateAreaKm2 = (points) => {
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const formatPower = (value) => (value < 10 ? value.toFixed(1).replace(/\.0$/, '') : value.toFixed(0));
 
 const calculatePathLoss = (freq, effectiveHTx, hRx, distanceKm) => {
   if (distanceKm <= 0.1) return 0;
@@ -264,6 +304,7 @@ function App() {
   const [hTx, setHTx] = useState(10);
   const [gain, setGain] = useState(6);
   const [hRx, setHRx] = useState(1.5);
+  const [modeKey, setModeKey] = useState('fm');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isPanelOpen, setIsPanelOpen] = useState(false);
   const [freqBand, setFreqBand] = useState('vhf');
@@ -277,6 +318,11 @@ function App() {
   const activeSitePreviewId = activeSite?.id;
   const activeSiteLat = activeSite?.position[0];
   const activeSiteLon = activeSite?.position[1];
+  const modeProfile = MODE_PROFILES[modeKey] ?? MODE_PROFILES.fm;
+  const serviceGrades = useMemo(() => GRADE_CONFIG.map((grade) => ({
+    ...grade,
+    thresholdDbm: modeProfile.thresholds[grade.key],
+  })), [modeProfile]);
   const powerDbm = 10 * Math.log10(power * 1000);
   const combinedAreas = useMemo(() => sites.reduce((total, site) => ({
     strong: total.strong + site.areas.strong,
@@ -390,7 +436,7 @@ function App() {
       const haat = (siteElevation + hTx) - avgElevation;
       const effectiveHTx = clamp(hTx + Math.max(0, haat), 2, 300);
 
-      GRADE_CONFIG.forEach((grade) => {
+      serviceGrades.forEach((grade) => {
         const targetLoss = powerDbm + gain - grade.thresholdDbm;
         const radius = findReliableDistance({
           freq,
@@ -420,7 +466,7 @@ function App() {
       status: failedChunks > 0 ? 'degraded' : 'analyzed',
       failedChunks,
     };
-  }, [freq, gain, hRx, hTx, powerDbm]);
+  }, [freq, gain, hRx, hTx, powerDbm, serviceGrades]);
 
   const analyzeTerrain = useCallback(async () => {
     if (isAnalyzingRef.current) return;
@@ -617,8 +663,20 @@ function App() {
           </div>
 
           <div className="control-group">
-            <label><Activity size={12} style={{ marginRight: '6px' }} /> TX POWER: {power}W</label>
-            <input type="range" min="1" max="100" value={power} onChange={(e) => setPower(Number(e.target.value))} />
+            <label><Activity size={12} style={{ marginRight: '6px' }} /> TX POWER: {formatPower(power)}W</label>
+            <div className="slider-container">
+              <input type="range" min="0.1" max="100" step="0.1" value={power} onChange={(e) => setPower(Number(e.target.value))} />
+              <input
+                className="numeric-input"
+                type="number"
+                min="0.1"
+                max="100"
+                step="0.1"
+                value={power}
+                aria-label="TX power in watts"
+                onChange={(e) => setPower(clamp(Number(e.target.value), 0.1, 100))}
+              />
+            </div>
           </div>
 
           <div className="control-group">
@@ -629,6 +687,28 @@ function App() {
           <div className="control-group">
             <label><Activity size={12} style={{ marginRight: '6px' }} /> RX HEIGHT: {hRx.toFixed(1)}m AGL</label>
             <input type="range" min="1" max="15" step="0.5" value={hRx} onChange={(e) => setHRx(Number(e.target.value))} />
+          </div>
+
+          <div className="control-group">
+            <label><Radio size={12} style={{ marginRight: '6px' }} /> MODE PROFILE</label>
+            <select
+              className="mode-select"
+              value={modeKey}
+              onChange={(e) => {
+                const nextMode = e.target.value;
+                const nextProfile = MODE_PROFILES[nextMode] ?? MODE_PROFILES.fm;
+                setModeKey(nextMode);
+                setFreq(nextProfile.defaultFreq);
+                setFreqBand(nextProfile.defaultFreq < 300 ? 'vhf' : 'uhf');
+              }}
+            >
+              {MODE_OPTIONS.map((option) => (
+                <option key={option.key} value={option.key}>{option.label}</option>
+              ))}
+            </select>
+            <div className="mode-note">
+              {modeProfile.note} · Fringe {modeProfile.thresholds.weak} dBm
+            </div>
           </div>
 
           <div className="control-group">
@@ -655,22 +735,34 @@ function App() {
 
           <div className="control-group">
             <label><Layers size={12} style={{ marginRight: '6px' }} /> TOWER HEIGHT: {hTx}m AGL</label>
-            <input type="range" min="2" max="200" value={hTx} onChange={(e) => setHTx(Number(e.target.value))} />
+            <div className="slider-container">
+              <input type="range" min="0" max="100" value={hTx} onChange={(e) => setHTx(Number(e.target.value))} />
+              <input
+                className="numeric-input"
+                type="number"
+                min="0"
+                max="100"
+                step="1"
+                value={hTx}
+                aria-label="Tower height above ground in meters"
+                onChange={(e) => setHTx(clamp(Number(e.target.value), 0, 100))}
+              />
+            </div>
           </div>
 
           <div className="control-group" style={{ marginTop: '25px', borderTop: '1px solid var(--glass-border)', paddingTop: '15px' }}>
             <p style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', marginBottom: '10px', letterSpacing: '1px' }}>PREDICTED ZONES</p>
             <div className="pro-legend-item">
               <div style={{ width: 10, height: 10, background: '#4dbd74', border: '1px solid white' }}></div>
-              <span>Strong signal</span>
+              <span>Strong signal &gt; {modeProfile.thresholds.strong} dBm</span>
             </div>
             <div className="pro-legend-item">
               <div style={{ width: 10, height: 10, background: '#ffc107', border: '1px solid white' }}></div>
-              <span>Moderate signal</span>
+              <span>Moderate signal &gt; {modeProfile.thresholds.moderate} dBm</span>
             </div>
             <div className="pro-legend-item">
               <div style={{ width: 10, height: 10, background: '#ff4444', border: '1px solid white' }}></div>
-              <span>Fringe signal</span>
+              <span>Fringe signal &gt; {modeProfile.thresholds.weak} dBm</span>
             </div>
           </div>
         </div>
@@ -714,7 +806,7 @@ function App() {
 
         {sites.map((site) => (
           <React.Fragment key={`coverage-${site.id}`}>
-            {GRADE_CONFIG.map((grade) => site.coveragePolygons[grade.key] && (
+            {serviceGrades.map((grade) => site.coveragePolygons[grade.key] && (
               <Polygon
                 key={`${site.id}-${grade.key}`}
                 positions={site.coveragePolygons[grade.key]}

@@ -72,11 +72,12 @@ The prediction does more than draw a simple radius circle. For each transmitter 
 
 The model responds to:
 
-- TX power in watts.
+- Mode profile, including FM voice, APRS/packet, SSB/weak signal, and LoRa SF7/SF9/SF12 presets.
+- TX power from 0.1 W to 100 W.
 - Antenna gain in dBi.
 - Receiver height above ground.
 - Frequency band and exact frequency.
-- Tower height above ground.
+- Tower height above ground from 0 m to 100 m.
 - Site elevation and surrounding terrain.
 
 ### Map Layers
@@ -97,7 +98,8 @@ The prediction flow is:
 ```mermaid
 graph TD
     User["User selects transmitter site"] --> Params["Set RF parameters"]
-    Params --> Elevation["Fetch site elevation"]
+    Params --> Mode["Apply mode-specific receiver thresholds"]
+    Mode --> Elevation["Fetch site elevation"]
     Elevation --> Radials["Generate 72 terrain radials"]
     Radials --> Samples["Sample terrain from 1 km to 64 km"]
     Samples --> HAAT["Estimate HAAT and effective TX height"]
@@ -158,15 +160,25 @@ For each candidate distance, the app checks sampled terrain along the path:
 
 This creates shorter coverage in blocked directions and longer coverage in clearer directions.
 
-### 5. Service Grade Thresholds
+### 5. Mode Profiles and Service Grade Thresholds
 
-The app searches for the maximum distance where total loss stays under each service-grade budget:
+The app searches for the maximum distance where total loss stays under each mode-specific service-grade budget. FM voice keeps the original practical voice-planning thresholds:
 
 | Grade | Threshold | Typical Use |
 | :--- | :--- | :--- |
 | Strong | > -93 dBm | Handheld / reliable audio |
 | Moderate | > -105 dBm | Mobile / usable field coverage |
 | Fringe | > -115 dBm | Weak signal / base station reception |
+
+Other profiles replace those thresholds with receiver-sensitivity-oriented values. LoRa presets model SF7, SF9, and SF12 at 125 kHz bandwidth by using deeper fringe thresholds and stronger signal-margin bands:
+
+| Mode | Strong | Moderate | Fringe |
+| :--- | :--- | :--- | :--- |
+| APRS / Packet | > -100 dBm | > -108 dBm | > -116 dBm |
+| SSB / Weak Signal | > -105 dBm | > -115 dBm | > -123 dBm |
+| LoRa SF7 125k | > -103 dBm | > -113 dBm | > -123 dBm |
+| LoRa SF9 125k | > -109 dBm | > -119 dBm | > -129 dBm |
+| LoRa SF12 125k | > -117 dBm | > -127 dBm | > -137 dBm |
 
 Each grade becomes a polygon built from the predicted distance in each radial direction.
 

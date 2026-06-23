@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { MapContainer, TileLayer, Marker, useMapEvents, Popup, Polygon, LayersControl, ZoomControl } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
-import { Radio, Activity, Layers, Zap, Mountain, BarChart3, Plus, Trash2, Antenna } from 'lucide-react';
+import { Radio, Activity, Layers, Zap, Mountain, BarChart3, Plus, Trash2, Antenna, Info, X } from 'lucide-react';
 import L from 'leaflet';
 
 import icon from 'leaflet/dist/images/marker-icon.png';
@@ -399,6 +399,7 @@ function App() {
   const [modeKey, setModeKey] = useState('fm');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isPanelOpen, setIsPanelOpen] = useState(false);
+  const [isAboutOpen, setIsAboutOpen] = useState(false);
   const [freqBand, setFreqBand] = useState('vhf');
   const [nextSiteId, setNextSiteId] = useState(2);
   const [analysisNotice, setAnalysisNotice] = useState('Ready for coverage prediction.');
@@ -710,6 +711,9 @@ function App() {
               <div className={`analysis-notice ${analysisNotice.includes('could not') ? 'error' : analysisNotice.includes('fallback') ? 'warning' : ''}`}>
                 {analysisNotice}
               </div>
+              <button className="about-button" type="button" onClick={() => setIsAboutOpen(true)}>
+                <Info size={14} /> About
+              </button>
             </div>
           </div>
 
@@ -732,6 +736,9 @@ function App() {
                 <strong style={{ fontSize: '0.9rem' }}>{combinedAreas.weak.toFixed(0)}</strong>
               </div>
             </div>
+            <button className="about-button" type="button" onClick={() => setIsAboutOpen(true)}>
+              <Info size={14} /> About
+            </button>
           </div>
 
           <div className="control-group">
@@ -947,6 +954,23 @@ function App() {
         ))}
       </MapContainer>
 
+      {isAboutOpen && (
+        <div className="about-modal-backdrop" role="presentation" onClick={() => setIsAboutOpen(false)}>
+          <div className="about-modal glass-panel" role="dialog" aria-modal="true" aria-labelledby="about-title" onClick={(event) => event.stopPropagation()}>
+            <button className="about-close-button" type="button" aria-label="Close about dialog" onClick={() => setIsAboutOpen(false)}>
+              <X size={18} />
+            </button>
+            <h2 id="about-title">About</h2>
+            <p>
+              It uses Hata-style path loss plus sampled terrain/Fresnel obstruction, so it should give useful approximate coverage zones, but real-world results can differ due to buildings, foliage, antenna pattern, local noise, receiver quality, weather, and terrain data accuracy.
+            </p>
+            <p className="about-credit">
+              Made by <a href="https://hamradio.my" target="_blank" rel="noreferrer">9M2PJU</a>
+            </p>
+          </div>
+        </div>
+      )}
+
       <style>{`
         .loading-spinner {
           border: 3px solid rgba(0,0,0,0.1);
@@ -1007,6 +1031,93 @@ function App() {
           color: #ff9b9b;
           background: rgba(255, 68, 68, 0.1);
         }
+        .about-button {
+          width: 100%;
+          min-height: 38px;
+          border-radius: 8px;
+          border: 1px solid rgba(255,255,255,0.14);
+          background: rgba(255,255,255,0.08);
+          color: var(--text-primary);
+          cursor: pointer;
+          font-weight: 800;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          margin-top: -6px;
+          margin-bottom: 14px;
+        }
+        .about-button:hover,
+        .about-button:focus-visible {
+          border-color: rgba(0, 163, 255, 0.55);
+          background: rgba(0, 163, 255, 0.16);
+          outline: none;
+        }
+        .about-modal-backdrop {
+          position: fixed;
+          inset: 0;
+          z-index: 3000;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 20px;
+          background: rgba(0, 0, 0, 0.56);
+          pointer-events: auto;
+        }
+        .about-modal {
+          position: relative;
+          width: min(460px, calc(100vw - 40px));
+          padding: 24px;
+          color: var(--text-primary);
+        }
+        .about-modal h2 {
+          margin: 0 36px 14px 0;
+          color: var(--title-blue);
+          font-size: 1.05rem;
+          font-weight: 900;
+        }
+        .about-modal p {
+          margin: 0;
+          color: var(--text-secondary);
+          font-size: 0.86rem;
+          line-height: 1.55;
+          font-weight: 650;
+        }
+        .about-modal .about-credit {
+          margin-top: 18px;
+          color: var(--text-primary);
+        }
+        .about-modal a {
+          color: var(--title-blue);
+          font-weight: 900;
+          text-decoration: none;
+        }
+        .about-modal a:hover,
+        .about-modal a:focus-visible {
+          text-decoration: underline;
+          outline: none;
+        }
+        .about-close-button {
+          position: absolute;
+          top: 14px;
+          right: 14px;
+          width: 34px;
+          height: 34px;
+          border-radius: 8px;
+          border: 1px solid rgba(255,255,255,0.14);
+          background: rgba(255,255,255,0.08);
+          color: var(--text-primary);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          cursor: pointer;
+        }
+        .about-close-button:hover,
+        .about-close-button:focus-visible {
+          border-color: rgba(0, 163, 255, 0.55);
+          background: rgba(0, 163, 255, 0.16);
+          outline: none;
+        }
         .leaflet-control-layers {
           border: 1px solid rgba(255,255,255,0.18) !important;
           border-radius: 10px !important;
@@ -1041,6 +1152,12 @@ function App() {
           }
           .analysis-notice {
             margin: 0 0 14px;
+          }
+          .about-button {
+            margin: -4px 0 16px;
+          }
+          .about-modal {
+            padding: 22px;
           }
         }
         .site-list {

@@ -192,7 +192,7 @@ const calculateTerrainPenalty = (radialSamples, radiusKm, siteElevation, hTx, hR
   samplesInPath.forEach((sample) => {
     const pathFraction = sample.distanceKm / radiusKm;
     const lineOfSightHeight = txAmsl + (rxAmsl - txAmsl) * pathFraction;
-    const firstFresnelRadius = 17.32 * Math.sqrt((sample.distanceKm * (radiusKm - sample.distanceKm)) / (freq * radiusKm));
+    const firstFresnelRadius = 548 * Math.sqrt((sample.distanceKm * (radiusKm - sample.distanceKm)) / (freq * radiusKm));
     const clearanceDeficit = sample.elevation - (lineOfSightHeight - 0.6 * firstFresnelRadius);
 
     if (clearanceDeficit <= 0) return;

@@ -160,6 +160,27 @@ For each candidate distance, the app checks sampled terrain along the path:
 
 This creates shorter coverage in blocked directions and longer coverage in clearer directions.
 
+The first Fresnel zone radius is calculated in meters with frequency in MHz:
+
+```text
+F1 = 548 sqrt(d1 d2 / (f D))
+```
+
+Where:
+
+- `d1` and `d2` are the path segment distances in kilometers.
+- `D` is the full path distance in kilometers.
+- `f` is frequency in MHz.
+
+The model expects at least 60% of the first Fresnel zone to be clear. If terrain violates that clearance, it applies a knife-edge diffraction-style loss:
+
+```text
+v = h sqrt(2 (d1 + d2) / (lambda d1 d2))
+J(v) = 6.9 + 20 log10(sqrt((v - 0.1)^2 + 1) + v - 0.1)
+```
+
+Where `h` is the clearance deficit in meters, `lambda` is wavelength in meters, and `d1`/`d2` are converted to meters for the diffraction calculation. The app also adds a small extra shadowing penalty for multiple obstructed terrain samples.
+
 ### 5. Mode Profiles and Service Grade Thresholds
 
 The app searches for the maximum distance where total loss stays under each mode-specific service-grade budget. FM voice keeps the original practical voice-planning thresholds:
@@ -181,6 +202,30 @@ Other profiles replace those thresholds with receiver-sensitivity-oriented value
 | LoRa SF12 125k | > -117 dBm | > -127 dBm | > -137 dBm |
 
 Each grade becomes a polygon built from the predicted distance in each radial direction.
+
+### 6. Formula Audit and Reliability
+
+The current formula set is suitable for comparative planning and field pre-checks, not for certified RF engineering sign-off. The calculation path has been checked for unit consistency and now uses the correct MHz form of the first Fresnel radius formula.
+
+What is considered reliable enough for planning:
+
+- TX power is converted with `Ptx dBm = 10 log10(Pwatts * 1000)`.
+- Antenna gain is added directly to the link budget as dBi.
+- Coverage is found where `path loss + terrain penalty` stays below `Ptx dBm + antenna gain - receiver threshold`.
+- The Hata-style suburban path loss equation matches the common Okumura-Hata form and suburban correction.
+- The terrain penalty uses line-of-sight clearance, 60% first Fresnel clearance, and a knife-edge diffraction-style loss approximation.
+- LoRa, APRS, SSB, and FM profiles are modeled by changing receiver threshold/link-margin bands, not by changing the propagation physics.
+
+Known reliability limits:
+
+- Okumura-Hata is empirical. It is strongest for macro-style outdoor links, not indoor handheld operation or street-canyon/building-level prediction.
+- The original Hata model is normally bounded around 150-1500 MHz, base antenna heights around 30-200 m, mobile heights around 1-10 m, and moderate link distances. This app extends the idea for amateur planning across 30-3000 MHz and clamps antenna heights internally to keep the math stable.
+- The UHF/SHF extension is a practical approximation, not a full ITU-R P.1546, Longley-Rice/ITM, or ray-tracing implementation.
+- Terrain is sampled at fixed radial distances out to 64 km. Predictions beyond that distance still run, but distant terrain detail is less complete.
+- The LoRa presets use typical sensitivity-style thresholds for SF7/SF9/SF12 at 125 kHz. Real LoRa reliability also depends on bandwidth, coding rate, payload length, interference, duty cycle, receiver implementation, and local regulations.
+- Feedline loss, receiver antenna gain, polarization mismatch, foliage, buildings, noise floor, interference, weather, and antenna radiation patterns are not fully modeled.
+
+For critical deployments, use this tool to choose candidate sites and then validate with field measurements or a regulatory-grade RF planning package.
 
 ---
 

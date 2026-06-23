@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Version-v4.3-0072ff?style=for-the-badge" alt="Version v4.3">
+  <img src="https://img.shields.io/badge/Version-v4.5-0072ff?style=for-the-badge" alt="Version v4.5">
   <img src="https://img.shields.io/badge/Live-coverage.hamradio.my-0072ff?style=for-the-badge&logo=react" alt="Live">
   <img src="https://img.shields.io/badge/Engine-Hata_%2B_Terrain-blueviolet?style=for-the-badge" alt="Engine">
   <img src="https://img.shields.io/badge/Mobile-Responsive-success?style=for-the-badge&logo=apple" alt="Mobile">
@@ -29,7 +29,7 @@
 
 **9M2PJU Coverage Prediction** is a browser-based RF coverage planning tool for amateur radio operators. It predicts practical signal coverage from one or more transmitter sites by combining radio path loss, transmitter parameters, antenna height, receiver height, terrain elevation, and map-based visualization.
 
-[**Launch v4.3 Dashboard**](https://coverage.hamradio.my)
+[**Launch v4.5 Dashboard**](https://coverage.hamradio.my)
 
 The app is designed for fast field planning: choose a transmitter location, adjust RF parameters, run the prediction, and inspect the expected strong, moderate, and fringe coverage zones directly on a map.
 
@@ -37,10 +37,10 @@ This app uses Hata-style path loss plus sampled terrain/Fresnel obstruction, so 
 
 ---
 
-## What Changed in v4.3
+## What Changed in v4.5
 
 - Renamed the app to **9M2PJU Coverage Prediction**.
-- Updated the subtitle to **Multi-Site Coverage Prediction v4.3**.
+- Updated the subtitle to **Multi-Site Coverage Prediction v4.5**.
 - Added support for up to 4 transmitter coverage sites.
 - Added combined coverage metrics across all active sites.
 - Added multiple base map layers while keeping standard OpenStreetMap as the default.
@@ -48,7 +48,7 @@ This app uses Hata-style path loss plus sampled terrain/Fresnel obstruction, so 
 - Reworked the mobile and desktop layout for better browser compatibility.
 - Added PWA metadata and offline app-shell caching for install support on mobile and desktop browsers.
 - Fixed generated bundle linting by excluding deployed `docs/` output from ESLint.
-- Updated project metadata to version `4.3.0`.
+- Updated project metadata to version `4.5.0`.
 
 ---
 

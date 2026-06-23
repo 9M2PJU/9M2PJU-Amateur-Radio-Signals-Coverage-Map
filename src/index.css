@@ -221,7 +221,7 @@ input[type="range"]::-webkit-slider-thumb {
   }
 }
 
-/* Mobile Native App UI (v4.3) */
+/* Mobile Native App UI (v4.5) */
 @media (max-width: 768px) {
   .ui-overlay {
     top: auto;

@@ -111,24 +111,6 @@ Important safeguards and assumptions:
 - Area totals are estimates and should be treated as planning numbers.
 - Real field use should still be checked with measurements.
 
-## Project Shape
-
-- Main app: `src/App.jsx`
-- Styling entry: `src/index.css`
-- PWA assets: `public/manifest.webmanifest`, `public/service-worker.js`
-- ITM / Longley-Rice helper service: `itm-longley-rice/`
-- RF guardrail tests: `scripts/rf-smoke-test.mjs`
-
-## Maintainer Checks
-
-```bash
-npm run test:rf
-npm run lint
-npm run build
-```
-
-These checks cover RF guardrails, linting, and production bundle generation.
-
 ## License
 
 This project is licensed under the **GNU Affero General Public License v3.0 or later**. See `LICENSE` for the full license text.

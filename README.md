@@ -21,7 +21,7 @@
 
 The app supports planning-grade predictions for up to four transmitter sites, using terrain sampling, link-budget controls, receiver assumptions, and map-based coverage overlays. It is intended for field planning and comparison, not certified RF engineering sign-off.
 
-The default propagation model is the 9M2PJU self-hosted **ITS Irregular Terrain Model (ITM) / Longley-Rice** service at `https://itm.hamradio.my`. If that service is unavailable, or when the selected frequency is above the ITM service limit, the app falls back to local terrain-aware planning models.
+The default propagation model is the 9M2PJU **ITS Irregular Terrain Model (ITM) / Longley-Rice** service at `https://itm.hamradio.my`. If that service is unavailable, or when the selected frequency is above the ITM service limit, the app falls back to local terrain-aware planning models.
 
 ## What Works Now
 
@@ -90,8 +90,6 @@ Validation compares measured signal levels against the predicted coverage zones 
 - Main app: `src/App.jsx`
 - Styling: `src/index.css`
 - PWA assets: `public/manifest.webmanifest`, `public/service-worker.js`
-- Production GitHub Pages output: `docs/`
-- Local build output: `dist/`
 - ITM / Longley-Rice helper service: `itm-longley-rice/`
 - RF guardrail tests: `scripts/rf-smoke-test.mjs`
 

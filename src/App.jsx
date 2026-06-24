@@ -159,8 +159,9 @@ const MAP_MIN_ZOOM = 3;
 const MAP_MAX_ZOOM = 19;
 const WORLD_BOUNDS = [[-85, -180], [85, 180]];
 const FALLBACK_TILE_URL = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256"%3E%3Crect width="256" height="256" fill="%23d8eef8"/%3E%3Cpath d="M0 64h256M0 128h256M0 192h256M64 0v256M128 0v256M192 0v256" stroke="%23b5d2df" stroke-width="1" opacity=".55"/%3E%3C/svg%3E';
+const OPEN_ELEVATION_API_URL = (import.meta.env.VITE_OPEN_ELEVATION_API_URL ?? 'https://elevation.hamradio.my/api/v1/lookup').replace(/\/$/, '');
 const ELEVATION_ENDPOINTS = [
-  'https://elevation.hamradio.my/api/v1/lookup',
+  OPEN_ELEVATION_API_URL,
   'https://api.open-elevation.com/api/v1/lookup',
 ];
 const ELEVATION_CHUNK_SIZE = 60;
@@ -174,6 +175,8 @@ const ITM_API_URL = (import.meta.env.VITE_ITM_API_URL ?? 'https://itm.hamradio.m
 const ITM_API_TIMEOUT_MS = 18000;
 const ITM_API_DISTANCE_STEP_KM = 0.5;
 const ITM_API_MAX_FREQUENCY_MHZ = 20000;
+const MIN_PREDICTION_RANGE_KM = 1;
+const MAX_PREDICTION_RANGE_KM = SAMPLING_INTERVALS_KM[SAMPLING_INTERVALS_KM.length - 1];
 
 const loadElevationCache = () => {
   if (typeof window === 'undefined') return new Map();
@@ -263,9 +266,10 @@ const toNumber = (value, fallback = 0) => {
   return Number.isFinite(parsed) ? parsed : fallback;
 };
 const thermalNoiseDbm = (bandwidthHz, noiseFigureDb) => -174 + 10 * Math.log10(Math.max(1, bandwidthHz)) + noiseFigureDb;
-const calculateNoiseLimitedThreshold = (bandwidthHz, noiseFigureDb, requiredSnrDb) => (
-  thermalNoiseDbm(bandwidthHz, noiseFigureDb) + requiredSnrDb
-);
+const microvoltsToDbm = (microvolts, impedanceOhms = 50) => {
+  const volts = Math.max(0.001, microvolts) * 1e-6;
+  return 10 * Math.log10(((volts ** 2) / impedanceOhms) * 1000);
+};
 
 const haversineDistanceKm = ([lat1, lon1], [lat2, lon2]) => {
   const R = 6371;
@@ -383,6 +387,14 @@ const calculateAtmosphericLoss = (freq, distanceKm, atmosphericLossDbPerKm) => {
   return clamp(oxygenWaterLossDbPerKm * distanceKm, 0, 20);
 };
 
+const calculateTwoRayLoss = ({ freq, distanceKm, hTx, hRx }) => {
+  if (distanceKm <= 0) return 0;
+  const wavelengthM = 300 / clamp(freq, MIN_FREQUENCY_MHZ, MAX_FREQUENCY_MHZ);
+  const breakpointKm = Math.max(0.1, (4 * Math.max(0.5, hTx) * Math.max(0.5, hRx)) / wavelengthM / 1000);
+  if (distanceKm <= breakpointKm) return 0;
+  return clamp(6 * Math.log10(distanceKm / breakpointKm), 0, 18);
+};
+
 const calculatePathLoss = (freq, effectiveHTx, hRx, distanceKm) => {
   const safeFreq = clamp(freq, MIN_FREQUENCY_MHZ, MAX_FREQUENCY_MHZ);
   const safeDistanceKm = Math.max(0.001, distanceKm);
@@ -426,10 +438,6 @@ const calculateItmStylePathLoss = ({ freq, effectiveHTx, hRx, distanceKm, radial
 
   return Math.max(fspl + roughnessLoss + horizonLoss, (hata * (1 - transitionWeight)) + ((fspl + roughnessLoss + horizonLoss) * transitionWeight));
 };
-
-const calculateModeThreshold = (gradeThresholdDbm, bandwidthHz, noiseFigureDb, requiredSnrDb) => (
-  Math.max(gradeThresholdDbm, calculateNoiseLimitedThreshold(bandwidthHz, noiseFigureDb, requiredSnrDb))
-);
 
 const getModelReliability = ({ freq, hTx, hRx, propagationModel, fadeMargin }) => {
   const notes = [];
@@ -620,6 +628,7 @@ const calculateTotalPathLoss = ({
   clutterMap,
   rainRateMmH,
   atmosphericLossDbPerKm,
+  useTwoRay,
 }) => {
   const cacheKey = distanceKm.toFixed(3);
   let terrainPenalty = terrainPenaltyCache?.get(cacheKey);
@@ -634,7 +643,8 @@ const calculateTotalPathLoss = ({
     clutterLossDb +
     calculateMappedClutterLoss({ sitePosition, bearing, distanceKm, clutterMap }) +
     calculateShfRainLoss(freq, distanceKm, rainRateMmH) +
-    calculateAtmosphericLoss(freq, distanceKm, atmosphericLossDbPerKm);
+    calculateAtmosphericLoss(freq, distanceKm, atmosphericLossDbPerKm) +
+    (useTwoRay ? calculateTwoRayLoss({ freq, distanceKm, hTx, hRx }) : 0);
 };
 
 const findReliableDistance = ({
@@ -653,9 +663,12 @@ const findReliableDistance = ({
   clutterMap,
   rainRateMmH,
   atmosphericLossDbPerKm,
+  useTwoRay,
+  maxRangeKm = MAX_PREDICTION_RANGE_KM,
 }) => {
+  const searchDistances = RELIABILITY_CHECK_DISTANCES_KM.filter((distanceKm) => distanceKm <= maxRangeKm);
   let low = RELIABILITY_CHECK_DISTANCES_KM[0];
-  let high = SAMPLING_INTERVALS_KM[SAMPLING_INTERVALS_KM.length - 1];
+  let high = maxRangeKm;
 
   if (calculateTotalPathLoss({
     modelKey,
@@ -673,11 +686,12 @@ const findReliableDistance = ({
     clutterMap,
     rainRateMmH,
     atmosphericLossDbPerKm,
+    useTwoRay,
   }) > targetLoss) {
     return low;
   }
 
-  for (const distanceKm of RELIABILITY_CHECK_DISTANCES_KM.slice(1)) {
+  for (const distanceKm of searchDistances.slice(1)) {
     const totalLoss = calculateTotalPathLoss({
       modelKey,
       freq,
@@ -694,6 +708,7 @@ const findReliableDistance = ({
       clutterMap,
       rainRateMmH,
       atmosphericLossDbPerKm,
+      useTwoRay,
     });
 
     if (totalLoss > targetLoss) {
@@ -724,6 +739,7 @@ const findReliableDistance = ({
       clutterMap,
       rainRateMmH,
       atmosphericLossDbPerKm,
+      useTwoRay,
     });
 
     if (totalLoss < targetLoss) low = mid;
@@ -756,6 +772,7 @@ const getPredictedSignalForMeasurement = ({
   atmosphericLossDbPerKm,
   serviceGrades,
   itmRadialLosses,
+  useTwoRay,
 }) => {
   if (!terrainProfile?.radialSampleSets?.length) return null;
 
@@ -773,12 +790,15 @@ const getPredictedSignalForMeasurement = ({
     ? itmPathLoss + calculateExternalLosses({
       freq,
       distanceKm,
+      hTx,
+      hRx,
       clutterLossDb,
       sitePosition: site.position,
       bearing,
       clutterMap,
       rainRateMmH,
       atmosphericLossDbPerKm,
+      useTwoRay,
     })
     : calculateTotalPathLoss({
       modelKey,
@@ -796,6 +816,7 @@ const getPredictedSignalForMeasurement = ({
       clutterMap,
       rainRateMmH,
       atmosphericLossDbPerKm,
+      useTwoRay,
     });
   const estimatedDbm = powerDbm + directionalGain + rxAntennaGain - systemLossDb - pathLoss + calibrationOffsetDb;
   const predictedGrade = [...serviceGrades]
@@ -825,13 +846,15 @@ const fetchWithTimeout = async (url, options = {}, timeoutMs = ELEVATION_TIMEOUT
   }
 };
 
-const createItmDistanceGrid = () => {
+const createItmDistanceGrid = (maxRangeKm = MAX_PREDICTION_RANGE_KM) => {
   const distances = new Set([0.1, 0.25, 0.5, 1]);
-  for (let distanceKm = 1.5; distanceKm <= SAMPLING_INTERVALS_KM[SAMPLING_INTERVALS_KM.length - 1]; distanceKm += ITM_API_DISTANCE_STEP_KM) {
+  for (let distanceKm = 1.5; distanceKm <= maxRangeKm; distanceKm += ITM_API_DISTANCE_STEP_KM) {
     distances.add(Number(distanceKm.toFixed(3)));
   }
-  SAMPLING_INTERVALS_KM.forEach((distanceKm) => distances.add(distanceKm));
-  return [...distances].sort((a, b) => a - b);
+  SAMPLING_INTERVALS_KM.forEach((distanceKm) => {
+    if (distanceKm <= maxRangeKm) distances.add(distanceKm);
+  });
+  return [...distances].filter((distanceKm) => distanceKm <= maxRangeKm).sort((a, b) => a - b);
 };
 
 const fetchItmRadialLosses = async ({
@@ -891,22 +914,28 @@ const getItmApiPathLoss = (itmLossMap, distanceKm) => {
 const calculateExternalLosses = ({
   freq,
   distanceKm,
+  hTx,
+  hRx,
   clutterLossDb,
   sitePosition,
   bearing,
   clutterMap,
   rainRateMmH,
   atmosphericLossDbPerKm,
+  useTwoRay,
 }) => (
   clutterLossDb +
   calculateMappedClutterLoss({ sitePosition, bearing, distanceKm, clutterMap }) +
   calculateShfRainLoss(freq, distanceKm, rainRateMmH) +
-  calculateAtmosphericLoss(freq, distanceKm, atmosphericLossDbPerKm)
+  calculateAtmosphericLoss(freq, distanceKm, atmosphericLossDbPerKm) +
+  (useTwoRay ? calculateTwoRayLoss({ freq, distanceKm, hTx, hRx }) : 0)
 );
 
 const findReliableDistanceFromLossMap = ({
   itmLossMap,
   freq,
+  hTx,
+  hRx,
   targetLoss,
   clutterLossDb,
   sitePosition,
@@ -914,18 +943,22 @@ const findReliableDistanceFromLossMap = ({
   clutterMap,
   rainRateMmH,
   atmosphericLossDbPerKm,
+  useTwoRay,
 }) => {
   if (!itmLossMap?.length) return null;
   let lastPassing = itmLossMap[0].distanceKm;
   let lastLoss = itmLossMap[0].lossDb + calculateExternalLosses({
     freq,
     distanceKm: itmLossMap[0].distanceKm,
+    hTx,
+    hRx,
     clutterLossDb,
     sitePosition,
     bearing,
     clutterMap,
     rainRateMmH,
     atmosphericLossDbPerKm,
+    useTwoRay,
   });
 
   if (lastLoss > targetLoss) return lastPassing;
@@ -935,12 +968,15 @@ const findReliableDistanceFromLossMap = ({
     const totalLoss = sample.lossDb + calculateExternalLosses({
       freq,
       distanceKm: sample.distanceKm,
+      hTx,
+      hRx,
       clutterLossDb,
       sitePosition,
       bearing,
       clutterMap,
       rainRateMmH,
       atmosphericLossDbPerKm,
+      useTwoRay,
     });
 
     if (totalLoss > targetLoss) {
@@ -1268,16 +1304,23 @@ function App() {
   const [freq, setFreq] = useState(145);
   const [hTx, setHTx] = useState(10);
   const [gain, setGain] = useState(6);
-  const [hRx, setHRx] = useState(1.5);
+  const [hRx, setHRx] = useState(10);
   const [modeKey, setModeKey] = useState('fm');
   const [propagationModel, setPropagationModel] = useState('ntiaItmApi');
   const [clutterKey, setClutterKey] = useState('suburban');
-  const [feedlineLoss, setFeedlineLoss] = useState(1);
-  const [rxAntennaGain, setRxAntennaGain] = useState(0);
+  const [txLineLoss, setTxLineLoss] = useState(3);
+  const [rxLineLoss, setRxLineLoss] = useState(0.5);
+  const [rxAntennaGain, setRxAntennaGain] = useState(2);
   const [noiseFigure, setNoiseFigure] = useState(6);
   const [requiredSnr, setRequiredSnr] = useState(12);
   const [receiverBandwidth, setReceiverBandwidth] = useState(12500);
-  const [fadeMargin, setFadeMargin] = useState(10);
+  const [fadeMargin, setFadeMargin] = useState(0);
+  const [rxThresholdUv, setRxThresholdUv] = useState(0.5);
+  const [strongSignalMarginDb, setStrongSignalMarginDb] = useState(10);
+  const [maxRangeKm, setMaxRangeKm] = useState(100);
+  const [itmReliabilityPercent, setItmReliabilityPercent] = useState(70);
+  const [useLandCover, setUseLandCover] = useState(false);
+  const [useTwoRay, setUseTwoRay] = useState(false);
   const [antennaAzimuth, setAntennaAzimuth] = useState(0);
   const [antennaBeamwidth, setAntennaBeamwidth] = useState(360);
   const [frontBackRatio, setFrontBackRatio] = useState(0);
@@ -1310,16 +1353,23 @@ function App() {
   const modeProfile = MODE_PROFILES[modeKey] ?? MODE_PROFILES.fm;
   const modelProfile = PROPAGATION_MODELS[propagationModel] ?? PROPAGATION_MODELS.enhancedHata;
   const clutterProfile = CLUTTER_PROFILES[clutterKey] ?? CLUTTER_PROFILES.suburban;
+  const activeClutterLossDb = useLandCover ? clutterProfile.lossDb : 0;
+  const activeClutterUncertaintyDb = useLandCover ? clutterProfile.uncertaintyDb : 0;
   const activeBand = BAND_OPTIONS.find((band) => band.key === freqBand) ?? BAND_OPTIONS[0];
+  const fringeThresholdDbm = microvoltsToDbm(rxThresholdUv);
   const serviceGrades = useMemo(() => GRADE_CONFIG.map((grade) => ({
     ...grade,
-    thresholdDbm: calculateModeThreshold(modeProfile.thresholds[grade.key], receiverBandwidth, noiseFigure, requiredSnr),
-  })), [modeProfile, noiseFigure, receiverBandwidth, requiredSnr]);
+    thresholdDbm: grade.key === 'weak'
+      ? fringeThresholdDbm
+      : grade.key === 'strong'
+        ? fringeThresholdDbm + strongSignalMarginDb
+        : fringeThresholdDbm + strongSignalMarginDb / 2,
+  })), [fringeThresholdDbm, strongSignalMarginDb]);
   const powerDbm = 10 * Math.log10(power * 1000);
   const combinedAreas = useMemo(() => calculateCombinedCoverageAreas(sites), [sites]);
 
   const analyzedSites = sites.filter((site) => site.coveragePolygons.weak).length;
-  const systemLossDb = feedlineLoss + fadeMargin;
+  const systemLossDb = txLineLoss + rxLineLoss + fadeMargin;
   const modelReliability = useMemo(() => getModelReliability({
     freq,
     hTx,
@@ -1328,7 +1378,7 @@ function App() {
     fadeMargin,
   }), [fadeMargin, freq, hRx, hTx, propagationModel]);
   const confidenceScore = clamp(
-    100 - clutterProfile.uncertaintyDb * 2 - fadeMargin * 0.7 - modelReliability.penalty - (propagationModel === 'ntiaItmApi' ? 2 : propagationModel === 'itmHybrid' ? 4 : 9),
+    100 - activeClutterUncertaintyDb * 2 - fadeMargin * 0.7 - modelReliability.penalty - (propagationModel === 'ntiaItmApi' ? 2 : propagationModel === 'itmHybrid' ? 4 : 9),
     35,
     95,
   );
@@ -1351,17 +1401,18 @@ function App() {
           txGain: gain,
           rxAntennaGain,
           systemLossDb,
-          clutterLossDb: clutterProfile.lossDb,
+          clutterLossDb: activeClutterLossDb,
           calibrationOffsetDb: activeCalibrationOffset,
           antennaPattern,
           antennaAzimuth,
           antennaBeamwidth,
           frontBackRatio,
-          clutterMap,
+          clutterMap: useLandCover ? clutterMap : null,
           rainRateMmH: rainRate,
           atmosphericLossDbPerKm: atmosphericLoss,
           serviceGrades,
           itmRadialLosses: site.itmRadialLosses,
+          useTwoRay,
         });
 
         if (predictedSignal) {
@@ -1379,12 +1430,12 @@ function App() {
             siteName: site.name,
             gradeKey,
             distanceKm,
-            estimatedDbm: serviceGrades.find((grade) => grade.key === gradeKey)?.thresholdDbm ?? modeProfile.thresholds.weak,
+            estimatedDbm: serviceGrades.find((grade) => grade.key === gradeKey)?.thresholdDbm ?? fringeThresholdDbm,
           };
         }
       });
 
-      const estimatedDbm = bestMatch?.estimatedDbm ?? modeProfile.thresholds.weak - 12;
+      const estimatedDbm = bestMatch?.estimatedDbm ?? fringeThresholdDbm - 12;
       return {
         ...measurement,
         predictedGrade: bestMatch?.gradeKey ?? 'outside',
@@ -1404,12 +1455,20 @@ function App() {
       assumptions: {
         propagationModel,
         clutterKey,
-        feedlineLoss,
+        useLandCover,
+        useTwoRay,
+        txLineLoss,
+        rxLineLoss,
         rxAntennaGain,
+        rxThresholdUv,
         noiseFigure,
         requiredSnr,
         receiverBandwidth,
         fadeMargin,
+        fringeThresholdDbm,
+        strongSignalMarginDb,
+        maxRangeKm,
+        itmReliabilityPercent,
         antennaAzimuth,
         antennaBeamwidth,
         frontBackRatio,
@@ -1426,7 +1485,7 @@ function App() {
         atmosphericLossDbPerKm: atmosphericLoss,
         radialCount: RADIALS_COUNT,
         terrainSamplesPerRadial: SAMPLING_INTERVALS_KM.length,
-        terrainMaxDistanceKm: SAMPLING_INTERVALS_KM[SAMPLING_INTERVALS_KM.length - 1],
+        terrainMaxDistanceKm: maxRangeKm,
         sites: sites.map((site) => ({
           id: site.id,
           name: site.name,
@@ -1445,19 +1504,21 @@ function App() {
     activeCalibrationOffset,
     antennaPattern,
     atmosphericLoss,
+    activeClutterLossDb,
     calibrationEnabled,
     clutterMap,
     clutterKey,
     confidenceScore,
     fadeMargin,
-    feedlineLoss,
+    fringeThresholdDbm,
     frontBackRatio,
     freq,
     gain,
     hRx,
     hTx,
+    itmReliabilityPercent,
+    maxRangeKm,
     measurements,
-    modeProfile.thresholds.weak,
     modelReliability.label,
     modelReliability.notes,
     itmApiStatus,
@@ -1468,10 +1529,15 @@ function App() {
     receiverBandwidth,
     requiredSnr,
     rxAntennaGain,
+    rxLineLoss,
+    rxThresholdUv,
     serviceGrades,
     sites,
+    strongSignalMarginDb,
     systemLossDb,
-    clutterProfile.lossDb,
+    txLineLoss,
+    useLandCover,
+    useTwoRay,
   ]);
 
   useEffect(() => {
@@ -1696,7 +1762,7 @@ function App() {
     const haatSamples = [];
     const newPolygons = { strong: [], moderate: [], weak: [] };
     const radialMargins = [];
-    const itmDistanceGrid = createItmDistanceGrid();
+    const itmDistanceGrid = createItmDistanceGrid(maxRangeKm);
     const itmRadialLosses = Array(RADIALS_COUNT).fill(null);
     let itmApiFailures = 0;
     let itmApiFallbacks = 0;
@@ -1724,7 +1790,7 @@ function App() {
             radialSamples,
             distancesKm: itmDistanceGrid,
             confidence: confidenceScore,
-            reliability: Math.max(50, confidenceScore),
+            reliability: itmReliabilityPercent,
           });
           itmApiLossMap = apiResult?.losses
             ?.filter((loss) => Number.isFinite(loss.distanceKm) && Number.isFinite(loss.lossDb))
@@ -1744,13 +1810,17 @@ function App() {
         const itmRadius = findReliableDistanceFromLossMap({
           itmLossMap: itmApiLossMap,
           freq,
+          hTx,
+          hRx,
           targetLoss,
-          clutterLossDb: clutterProfile.lossDb,
+          clutterLossDb: activeClutterLossDb,
           sitePosition: site.position,
           bearing,
-          clutterMap,
+          clutterMap: useLandCover ? clutterMap : null,
           rainRateMmH: rainRate,
           atmosphericLossDbPerKm: atmosphericLoss,
+          useTwoRay,
+          maxRangeKm,
         });
         const radius = itmRadius ?? findReliableDistance({
           modelKey: propagationModel,
@@ -1761,13 +1831,15 @@ function App() {
           targetLoss,
           radialSamples,
           siteElevation,
-          clutterLossDb: clutterProfile.lossDb,
+          clutterLossDb: activeClutterLossDb,
           terrainPenaltyCache,
           sitePosition: site.position,
           bearing,
-          clutterMap,
+          clutterMap: useLandCover ? clutterMap : null,
           rainRateMmH: rainRate,
           atmosphericLossDbPerKm: atmosphericLoss,
+          useTwoRay,
+          maxRangeKm,
         });
         newPolygons[grade.key].push(getDestinationPoint(site.position[0], site.position[1], bearing, radius));
 
@@ -1777,12 +1849,15 @@ function App() {
             ? itmPathLoss + calculateExternalLosses({
               freq,
               distanceKm: radius,
-              clutterLossDb: clutterProfile.lossDb,
+              hTx,
+              hRx,
+              clutterLossDb: activeClutterLossDb,
               sitePosition: site.position,
               bearing,
-              clutterMap,
+              clutterMap: useLandCover ? clutterMap : null,
               rainRateMmH: rainRate,
               atmosphericLossDbPerKm: atmosphericLoss,
+              useTwoRay,
             })
             : calculateTotalPathLoss({
               modelKey: propagationModel,
@@ -1793,13 +1868,14 @@ function App() {
               distanceKm: radius,
               radialSamples,
               siteElevation,
-              clutterLossDb: clutterProfile.lossDb,
+              clutterLossDb: activeClutterLossDb,
               terrainPenaltyCache,
               sitePosition: site.position,
               bearing,
-              clutterMap,
+              clutterMap: useLandCover ? clutterMap : null,
               rainRateMmH: rainRate,
               atmosphericLossDbPerKm: atmosphericLoss,
+              useTwoRay,
             });
           radialMargins.push(targetLoss - pathLossAtRadius);
         }
@@ -1851,10 +1927,10 @@ function App() {
     antennaAzimuth,
     antennaBeamwidth,
     activeCalibrationOffset,
+    activeClutterLossDb,
     antennaPattern,
     atmosphericLoss,
     clutterKey,
-    clutterProfile.lossDb,
     clutterMap,
     confidenceScore,
     freq,
@@ -1862,12 +1938,16 @@ function App() {
     gain,
     hRx,
     hTx,
+    itmReliabilityPercent,
+    maxRangeKm,
     powerDbm,
     propagationModel,
     rainRate,
     rxAntennaGain,
     serviceGrades,
     systemLossDb,
+    useLandCover,
+    useTwoRay,
   ]);
 
   const analyzeTerrain = useCallback(async () => {
@@ -2131,7 +2211,7 @@ function App() {
               ))}
             </select>
             <div className="mode-note">
-              {modeProfile.note} · Fringe {modeProfile.thresholds.weak} dBm
+              {modeProfile.note} · Fringe {fringeThresholdDbm.toFixed(2)} dBm
             </div>
           </div>
 
@@ -2154,7 +2234,7 @@ function App() {
               ))}
             </select>
             <div className="engineering-summary">
-              Confidence estimate: {confidenceScore.toFixed(0)}% · {modelReliability.label} reliability · clutter uncertainty ±{clutterProfile.uncertaintyDb} dB
+              Confidence estimate: {confidenceScore.toFixed(0)}% · {modelReliability.label} reliability · clutter uncertainty ±{activeClutterUncertaintyDb} dB
             </div>
             <div className="mode-note">
               {modelReliability.notes[0]}
@@ -2169,11 +2249,26 @@ function App() {
           <div className="control-group engineering-group">
             <label><Activity size={12} style={{ marginRight: '6px' }} /> LINK BUDGET</label>
             <div className="engineering-grid">
-              <label>Feedline loss
-                <input className="numeric-input compact-input" type="number" min="0" max="20" step="0.1" value={feedlineLoss} onChange={(e) => setFeedlineLoss(clamp(toNumber(e.target.value), 0, 20))} />
+              <label>TX line loss
+                <input className="numeric-input compact-input" type="number" min="0" max="20" step="0.1" value={txLineLoss} onChange={(e) => setTxLineLoss(clamp(toNumber(e.target.value), 0, 20))} />
+              </label>
+              <label>RX line loss
+                <input className="numeric-input compact-input" type="number" min="0" max="20" step="0.1" value={rxLineLoss} onChange={(e) => setRxLineLoss(clamp(toNumber(e.target.value), 0, 20))} />
               </label>
               <label>RX gain
                 <input className="numeric-input compact-input" type="number" min="-20" max="30" step="0.5" value={rxAntennaGain} onChange={(e) => setRxAntennaGain(clamp(toNumber(e.target.value), -20, 30))} />
+              </label>
+              <label>RX threshold uV
+                <input className="numeric-input compact-input" type="number" min="0.01" max="1000" step="0.01" value={rxThresholdUv} onChange={(e) => setRxThresholdUv(clamp(toNumber(e.target.value), 0.01, 1000))} />
+              </label>
+              <label>Strong margin
+                <input className="numeric-input compact-input" type="number" min="0" max="60" step="1" value={strongSignalMarginDb} onChange={(e) => setStrongSignalMarginDb(clamp(toNumber(e.target.value), 0, 60))} />
+              </label>
+              <label>Max range km
+                <input className="numeric-input compact-input" type="number" min={MIN_PREDICTION_RANGE_KM} max={MAX_PREDICTION_RANGE_KM} step="1" value={maxRangeKm} onChange={(e) => setMaxRangeKm(clamp(toNumber(e.target.value), MIN_PREDICTION_RANGE_KM, MAX_PREDICTION_RANGE_KM))} />
+              </label>
+              <label>ITM reliability %
+                <input className="numeric-input compact-input" type="number" min="1" max="99" step="1" value={itmReliabilityPercent} onChange={(e) => setItmReliabilityPercent(clamp(toNumber(e.target.value), 1, 99))} />
               </label>
               <label>Fade margin
                 <input className="numeric-input compact-input" type="number" min="0" max="40" step="1" value={fadeMargin} onChange={(e) => setFadeMargin(clamp(toNumber(e.target.value), 0, 40))} />
@@ -2197,9 +2292,17 @@ function App() {
               <label>Atm loss/km
                 <input className="numeric-input compact-input" type="number" min="0" max="1" step="0.005" value={atmosphericLoss} onChange={(e) => setAtmosphericLoss(clamp(toNumber(e.target.value), 0, 1))} />
               </label>
+              <label className="toggle-field">
+                <input type="checkbox" checked={useLandCover} onChange={(e) => setUseLandCover(e.target.checked)} />
+                Use land cover
+              </label>
+              <label className="toggle-field">
+                <input type="checkbox" checked={useTwoRay} onChange={(e) => setUseTwoRay(e.target.checked)} />
+                Use two rays
+              </label>
             </div>
             <div className="engineering-summary">
-              Noise floor {thermalNoiseDbm(receiverBandwidth, noiseFigure).toFixed(1)} dBm · system loss {systemLossDb.toFixed(1)} dB
+              RX threshold {fringeThresholdDbm.toFixed(2)} dBm · noise floor {thermalNoiseDbm(receiverBandwidth, noiseFigure).toFixed(1)} dBm · total loss {systemLossDb.toFixed(1)} dB
             </div>
           </div>
 
@@ -2497,7 +2600,7 @@ function App() {
           color: var(--text-secondary);
         }
         .analysis-notice {
-          margin: -10px 0 18px;
+          margin: 8px 0 14px;
           padding: 9px 10px;
           border-radius: 8px;
           border: 1px solid rgba(255,255,255,0.1);
@@ -2506,6 +2609,8 @@ function App() {
           font-size: 0.72rem;
           line-height: 1.35;
           font-weight: 700;
+          overflow-wrap: anywhere;
+          word-break: normal;
         }
         .analysis-notice.warning {
           border-color: rgba(255, 193, 7, 0.35);
@@ -2516,6 +2621,23 @@ function App() {
           border-color: rgba(255, 68, 68, 0.35);
           color: #ff9b9b;
           background: rgba(255, 68, 68, 0.1);
+        }
+        .toggle-field {
+          min-height: 34px;
+          display: flex !important;
+          align-items: center;
+          gap: 8px;
+          padding: 7px 8px;
+          border: 1px solid rgba(255,255,255,0.12);
+          border-radius: 8px;
+          background: rgba(255,255,255,0.06);
+          color: var(--text-primary) !important;
+          font-weight: 800;
+        }
+        .toggle-field input {
+          width: 14px;
+          height: 14px;
+          accent-color: var(--accent-blue);
         }
         .about-button {
           width: 100%;

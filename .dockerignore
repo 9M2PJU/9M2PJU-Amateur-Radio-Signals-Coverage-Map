@@ -1,0 +1,11 @@
+.git
+.github
+.agents
+.codex
+node_modules
+dist
+docs
+npm-debug.log*
+Dockerfile
+docker-compose.yml
+README.md

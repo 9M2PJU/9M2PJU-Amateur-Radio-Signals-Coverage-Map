@@ -1,0 +1,11 @@
+services:
+  coverage-map:
+    build:
+      context: .
+      args:
+        VITE_ITM_API_URL: ${VITE_ITM_API_URL:-https://itm.hamradio.my}
+        VITE_OPEN_ELEVATION_API_URL: ${VITE_OPEN_ELEVATION_API_URL:-https://elevation.hamradio.my/api/v1/lookup}
+    image: 9m2pju-coverage-map:latest
+    ports:
+      - "${COVERAGE_MAP_PORT:-8080}:80"
+    restart: unless-stopped

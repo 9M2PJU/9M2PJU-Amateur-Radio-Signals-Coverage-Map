@@ -96,6 +96,11 @@ const BANDWIDTH_OPTIONS = [
   { label: '3 kHz SSB', value: 3000 },
   { label: '125 kHz LoRa', value: 125000 },
 ];
+const BAND_OPTIONS = [
+  { key: 'vhf', label: 'VHF', rangeLabel: '30-300 MHz', defaultFreq: 144, min: 30, max: 300 },
+  { key: 'uhf', label: 'UHF', rangeLabel: '300-3000 MHz', defaultFreq: 430, min: 300, max: 3000 },
+  { key: 'shf', label: 'SHF', rangeLabel: '3-30 GHz', defaultFreq: 5600, min: 3000, max: 30000 },
+];
 const MAP_LAYERS = [
   {
     name: 'OpenStreetMap Standard',
@@ -753,6 +758,7 @@ function App() {
   const modeProfile = MODE_PROFILES[modeKey] ?? MODE_PROFILES.fm;
   const modelProfile = PROPAGATION_MODELS[propagationModel] ?? PROPAGATION_MODELS.enhancedHata;
   const clutterProfile = CLUTTER_PROFILES[clutterKey] ?? CLUTTER_PROFILES.suburban;
+  const activeBand = BAND_OPTIONS.find((band) => band.key === freqBand) ?? BAND_OPTIONS[0];
   const serviceGrades = useMemo(() => GRADE_CONFIG.map((grade) => ({
     ...grade,
     thresholdDbm: calculateModeThreshold(modeProfile.thresholds[grade.key], receiverBandwidth, noiseFigure, requiredSnr),
@@ -1432,25 +1438,27 @@ function App() {
 
           <div className="control-group">
             <label style={{ fontSize: '0.7rem', color: '#888', display: 'block', marginBottom: '10px' }}><Radio size={12} /> BAND SELECTOR</label>
-            <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
-              <button
-                onClick={() => { setFreqBand('vhf'); setFreq(144); }}
-                style={{ flex: 1, padding: '6px', fontSize: '0.75rem', borderRadius: '8px', border: '1px solid #ddd', background: freqBand === 'vhf' ? '#0072ff' : 'white', color: freqBand === 'vhf' ? 'white' : '#333', fontWeight: 'bold' }}
-              >VHF (30-300)</button>
-              <button
-                onClick={() => { setFreqBand('uhf'); setFreq(430); }}
-                style={{ flex: 1, padding: '6px', fontSize: '0.75rem', borderRadius: '8px', border: '1px solid #ddd', background: freqBand === 'uhf' ? '#0072ff' : 'white', color: freqBand === 'uhf' ? 'white' : '#333', fontWeight: 'bold' }}
-              >UHF (300-3000)</button>
-              <button
-                onClick={() => { setFreqBand('shf'); setFreq(5600); }}
-                style={{ flex: 1, padding: '6px', fontSize: '0.75rem', borderRadius: '8px', border: '1px solid #ddd', background: freqBand === 'shf' ? '#0072ff' : 'white', color: freqBand === 'shf' ? 'white' : '#333', fontWeight: 'bold' }}
-              >SHF (3-30GHz)</button>
+            <div className="band-selector" role="group" aria-label="Band selector">
+              {BAND_OPTIONS.map((band) => (
+                <button
+                  key={band.key}
+                  type="button"
+                  className={`band-button ${freqBand === band.key ? 'active' : ''}`}
+                  onClick={() => {
+                    setFreqBand(band.key);
+                    setFreq(band.defaultFreq);
+                  }}
+                >
+                  <span>{band.label}</span>
+                  <small>{band.rangeLabel}</small>
+                </button>
+              ))}
             </div>
             <label>FREQUENCY: {freq}MHz</label>
             <input
               type="range"
-              min={freqBand === 'vhf' ? 30 : freqBand === 'uhf' ? 300 : 3000}
-              max={freqBand === 'vhf' ? 300 : freqBand === 'uhf' ? 3000 : 30000}
+              min={activeBand.min}
+              max={activeBand.max}
               value={freq}
               onChange={(e) => setFreq(Number(e.target.value))}
             />

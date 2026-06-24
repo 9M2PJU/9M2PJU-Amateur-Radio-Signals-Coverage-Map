@@ -276,6 +276,55 @@ input[type="range"]::-webkit-slider-thumb {
   text-align: right;
 }
 
+.band-selector {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.band-button {
+  min-width: 0;
+  min-height: 52px;
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 7px 4px;
+  text-align: center;
+}
+
+.band-button span {
+  color: inherit;
+  font-size: 0.78rem;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.band-button small {
+  color: var(--text-secondary);
+  font-size: 0.58rem;
+  font-weight: 800;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+.band-button.active {
+  border-color: rgba(0, 163, 255, 0.85);
+  background: #0072ff;
+  color: white;
+}
+
+.band-button.active small {
+  color: rgba(255, 255, 255, 0.85);
+}
+
 /* Leaflet Overrides */
 .leaflet-container {
   background: #d8eef8 !important;

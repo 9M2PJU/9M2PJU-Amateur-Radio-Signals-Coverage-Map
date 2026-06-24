@@ -135,6 +135,7 @@ const EMPTY_AREAS = { strong: 0, moderate: 0, weak: 0 };
 const EMPTY_POLYGONS = { strong: null, moderate: null, weak: null };
 const RADIALS_COUNT = 72;
 const SAMPLING_INTERVALS_KM = [0.25, 0.5, 1, 2, 4, 6, 8, 10, 12, 16, 24, 32, 48, 64, 96, 120];
+const RELIABILITY_CHECK_DISTANCES_KM = [0.1, ...SAMPLING_INTERVALS_KM];
 const HAAT_MIN_DISTANCE_KM = 3;
 const HAAT_MAX_DISTANCE_KM = 16;
 const TERRAIN_PROFILE_STEP_KM = 0.5;
@@ -290,6 +291,33 @@ const calculateFreeSpacePathLoss = (freq, distanceKm) => (
   32.44 + 20 * Math.log10(Math.max(0.001, distanceKm)) + 20 * Math.log10(clamp(freq, MIN_FREQUENCY_MHZ, MAX_FREQUENCY_MHZ))
 );
 
+const calculateHataMobileCorrection = (freq, hRx) => {
+  const logFreq = Math.log10(freq);
+  return (1.1 * logFreq - 0.7) * hRx - (1.56 * logFreq - 0.8);
+};
+
+const calculateHataSuburbanPathLoss = (freq, effectiveHTx, hRx, distanceKm) => {
+  const logFreq = Math.log10(freq);
+  const logHTx = Math.log10(clamp(effectiveHTx, 30, 200));
+  const safeHRx = clamp(hRx, 1, 10);
+  const mobileCorrection = calculateHataMobileCorrection(freq, safeHRx);
+  const logDist = Math.log10(Math.max(1, distanceKm));
+  const urbanLoss = 69.55 + 26.16 * logFreq - 13.82 * logHTx - mobileCorrection + (44.9 - 6.55 * logHTx) * logDist;
+  const suburbanCorrection = 2 * (Math.log10(freq / 28) ** 2) + 5.4;
+
+  return urbanLoss - suburbanCorrection;
+};
+
+const calculateCost231SuburbanPathLoss = (freq, effectiveHTx, hRx, distanceKm) => {
+  const logFreq = Math.log10(freq);
+  const logHTx = Math.log10(clamp(effectiveHTx, 30, 200));
+  const safeHRx = clamp(hRx, 1, 10);
+  const mobileCorrection = calculateHataMobileCorrection(freq, safeHRx);
+  const logDist = Math.log10(Math.max(1, distanceKm));
+
+  return 46.3 + 33.9 * logFreq - 13.82 * logHTx - mobileCorrection + (44.9 - 6.55 * logHTx) * logDist;
+};
+
 const calculateShfExcessLoss = (freq, distanceKm) => {
   const safeFreq = clamp(freq, 3000, MAX_FREQUENCY_MHZ);
   const frequencyFactor = clamp((safeFreq - 3000) / (MAX_FREQUENCY_MHZ - 3000), 0, 1);
@@ -297,23 +325,26 @@ const calculateShfExcessLoss = (freq, distanceKm) => {
 };
 
 const calculatePathLoss = (freq, effectiveHTx, hRx, distanceKm) => {
-  if (distanceKm <= 0.1) return 0;
-
   const safeFreq = clamp(freq, MIN_FREQUENCY_MHZ, MAX_FREQUENCY_MHZ);
+  const safeDistanceKm = Math.max(0.001, distanceKm);
+  const freeSpaceLoss = calculateFreeSpacePathLoss(safeFreq, safeDistanceKm);
+
   if (safeFreq > 3000) {
-    return calculateFreeSpacePathLoss(safeFreq, distanceKm) + calculateShfExcessLoss(safeFreq, distanceKm);
+    return freeSpaceLoss + calculateShfExcessLoss(safeFreq, safeDistanceKm);
   }
 
-  const logFreq = Math.log10(safeFreq);
-  const logHTx = Math.log10(clamp(effectiveHTx, 2, 300));
-  const safeHRx = clamp(hRx, 1, 30);
-  const mobileCorrection = (1.1 * logFreq - 0.7) * safeHRx - (1.56 * logFreq - 0.8);
-  const logDist = Math.log10(distanceKm);
-  const hataUrban = 69.55 + 26.16 * logFreq - 13.82 * logHTx - mobileCorrection + (44.9 - 6.55 * logHTx) * logDist;
-  const suburbanCorrection = 2 * (Math.log10(safeFreq / 28) ** 2) + 5.4;
-  const cost231Extension = safeFreq > 1500 ? 3 + (safeFreq - 1500) / 1500 * 6 : 0;
+  const hataFreq = clamp(safeFreq, 150, 1500);
+  const hataLoss = calculateHataSuburbanPathLoss(hataFreq, effectiveHTx, hRx, safeDistanceKm);
 
-  return hataUrban - suburbanCorrection + cost231Extension;
+  if (safeFreq <= 1500) {
+    return Math.max(freeSpaceLoss, hataLoss);
+  }
+
+  const costFreq = clamp(safeFreq, 1500, 2000);
+  const costLoss = calculateCost231SuburbanPathLoss(costFreq, effectiveHTx, hRx, safeDistanceKm);
+  const highUhfExtension = safeFreq > 2000 ? (safeFreq - 2000) / 1000 * 5 : 0;
+
+  return Math.max(freeSpaceLoss, costLoss + highUhfExtension);
 };
 
 const calculateTerrainRoughness = (radialSamples, siteElevation) => {
@@ -340,6 +371,52 @@ const calculateItmStylePathLoss = ({ freq, effectiveHTx, hRx, distanceKm, radial
 const calculateModeThreshold = (gradeThresholdDbm, bandwidthHz, noiseFigureDb, requiredSnrDb) => (
   Math.max(gradeThresholdDbm, calculateNoiseLimitedThreshold(bandwidthHz, noiseFigureDb, requiredSnrDb))
 );
+
+const getModelReliability = ({ freq, hTx, hRx, propagationModel, fadeMargin }) => {
+  const notes = [];
+  let penalty = 0;
+
+  if (freq < 150) {
+    penalty += 16;
+    notes.push('Low VHF uses an extrapolated terrain-aware model; field validation is strongly recommended.');
+  } else if (freq <= 1500) {
+    notes.push('Best range for the Hata-style outdoor VHF/UHF estimate.');
+  } else if (freq <= 2000) {
+    penalty += 6;
+    notes.push('Uses COST-231-style high-UHF extension; validate locally when possible.');
+  } else if (freq <= 3000) {
+    penalty += 12;
+    notes.push('High-UHF prediction is extrapolated; terrain and local clutter dominate accuracy.');
+  } else {
+    penalty += 18;
+    notes.push('SHF/microwave prediction is line-of-sight planning; rain, foliage, buildings, and antenna alignment can dominate.');
+  }
+
+  if (hTx < 30 && freq <= 3000) {
+    penalty += 8;
+    notes.push('TX antenna height is below the normal Hata/COST-Hata macro-cell range.');
+  }
+
+  if (hRx > 10 && freq <= 3000) {
+    penalty += 4;
+    notes.push('RX height is above the normal mobile-station range for Hata-style formulas.');
+  }
+
+  if (fadeMargin < 6) {
+    penalty += 6;
+    notes.push('Fade margin below 6 dB may be optimistic for real field use.');
+  }
+
+  if (propagationModel === 'itmHybrid') {
+    notes.push('ITM-style hybrid is conservative, but not a full Longley-Rice implementation.');
+  }
+
+  return {
+    penalty,
+    label: penalty <= 8 ? 'High' : penalty <= 22 ? 'Moderate' : 'Planning only',
+    notes,
+  };
+};
 
 const getElevationAtDistance = (radialSamples, distanceKm, fallbackElevation) => {
   if (!radialSamples.length || distanceKm <= 0) return fallbackElevation;
@@ -439,23 +516,77 @@ const calculateRadialHaat = (siteElevation, hTx, radialSamples) => {
   return (siteElevation + hTx) - avgElevation;
 };
 
+const calculateTotalPathLoss = ({ modelKey, freq, effectiveHTx, hTx, hRx, distanceKm, radialSamples, siteElevation, clutterLossDb, terrainPenaltyCache }) => {
+  const cacheKey = distanceKm.toFixed(3);
+  let terrainPenalty = terrainPenaltyCache?.get(cacheKey);
+
+  if (typeof terrainPenalty !== 'number') {
+    terrainPenalty = calculateTerrainPenalty(radialSamples, distanceKm, siteElevation, hTx, hRx, freq);
+    terrainPenaltyCache?.set(cacheKey, terrainPenalty);
+  }
+
+  return calculateModelPathLoss({ modelKey, freq, effectiveHTx, hRx, distanceKm, radialSamples, siteElevation }) +
+    terrainPenalty +
+    clutterLossDb;
+};
+
 const findReliableDistance = ({ modelKey, freq, effectiveHTx, hTx, hRx, targetLoss, radialSamples, siteElevation, clutterLossDb, terrainPenaltyCache }) => {
-  let low = 0.1;
-  let high = 120;
+  let low = RELIABILITY_CHECK_DISTANCES_KM[0];
+  let high = SAMPLING_INTERVALS_KM[SAMPLING_INTERVALS_KM.length - 1];
+
+  if (calculateTotalPathLoss({
+    modelKey,
+    freq,
+    effectiveHTx,
+    hTx,
+    hRx,
+    distanceKm: low,
+    radialSamples,
+    siteElevation,
+    clutterLossDb,
+    terrainPenaltyCache,
+  }) > targetLoss) {
+    return low;
+  }
+
+  for (const distanceKm of RELIABILITY_CHECK_DISTANCES_KM.slice(1)) {
+    const totalLoss = calculateTotalPathLoss({
+      modelKey,
+      freq,
+      effectiveHTx,
+      hTx,
+      hRx,
+      distanceKm,
+      radialSamples,
+      siteElevation,
+      clutterLossDb,
+      terrainPenaltyCache,
+    });
+
+    if (totalLoss > targetLoss) {
+      high = distanceKm;
+      break;
+    }
+
+    low = distanceKm;
+  }
+
+  if (low === high) return low;
 
   for (let i = 0; i < PREDICTION_SEARCH_ITERATIONS; i++) {
     const mid = (low + high) / 2;
-    const cacheKey = mid.toFixed(3);
-    let terrainPenalty = terrainPenaltyCache?.get(cacheKey);
-
-    if (typeof terrainPenalty !== 'number') {
-      terrainPenalty = calculateTerrainPenalty(radialSamples, mid, siteElevation, hTx, hRx, freq);
-      terrainPenaltyCache?.set(cacheKey, terrainPenalty);
-    }
-
-    const totalLoss = calculateModelPathLoss({ modelKey, freq, effectiveHTx, hRx, distanceKm: mid, radialSamples, siteElevation }) +
-      terrainPenalty +
-      clutterLossDb;
+    const totalLoss = calculateTotalPathLoss({
+      modelKey,
+      freq,
+      effectiveHTx,
+      hTx,
+      hRx,
+      distanceKm: mid,
+      radialSamples,
+      siteElevation,
+      clutterLossDb,
+      terrainPenaltyCache,
+    });
 
     if (totalLoss < targetLoss) low = mid;
     else high = mid;
@@ -772,8 +903,15 @@ function App() {
 
   const analyzedSites = sites.filter((site) => site.coveragePolygons.weak).length;
   const systemLossDb = feedlineLoss + fadeMargin;
+  const modelReliability = useMemo(() => getModelReliability({
+    freq,
+    hTx,
+    hRx,
+    propagationModel,
+    fadeMargin,
+  }), [fadeMargin, freq, hRx, hTx, propagationModel]);
   const confidenceScore = clamp(
-    100 - clutterProfile.uncertaintyDb * 2 - fadeMargin * 0.7 - (propagationModel === 'itmHybrid' ? 4 : 9),
+    100 - clutterProfile.uncertaintyDb * 2 - fadeMargin * 0.7 - modelReliability.penalty - (propagationModel === 'itmHybrid' ? 4 : 9),
     35,
     95,
   );
@@ -851,6 +989,8 @@ function App() {
         antennaBeamwidth,
         frontBackRatio,
         confidenceScore,
+        reliability: modelReliability.label,
+        reliabilityNotes: modelReliability.notes,
       },
       summary: summarizeErrors(comparisons),
       comparisons,
@@ -869,6 +1009,8 @@ function App() {
     hTx,
     measurements,
     modeProfile.thresholds.weak,
+    modelReliability.label,
+    modelReliability.notes,
     noiseFigure,
     powerDbm,
     propagationModel,
@@ -1201,7 +1343,7 @@ function App() {
             </div>
             <div>
               <h1 style={{ fontSize: '1.2rem', fontWeight: '900', letterSpacing: '0.5px' }}>9M2PJU Coverage Prediction</h1>
-              <p style={{ fontSize: '0.75rem', fontWeight: '600' }}>Multi-Site Coverage Prediction v4.5.1</p>
+              <p style={{ fontSize: '0.75rem', fontWeight: '600' }}>Multi-Site Coverage Prediction v4.5.2</p>
             </div>
           </div>
         </div>
@@ -1214,7 +1356,7 @@ function App() {
               <img src="/brand_logo_v6.png" alt="Logo" style={{ width: '32px', height: '32px', objectFit: 'contain' }} />
               <div>
                 <h1 style={{ margin: 0, fontSize: '1.1rem', fontWeight: '900', color: 'var(--title-blue)', letterSpacing: '0.5px' }}>9M2PJU Coverage Prediction</h1>
-                  <p style={{ margin: 0, fontSize: '0.65rem', fontWeight: '600', color: 'var(--text-secondary)' }}>Multi-Site Coverage Prediction v4.5.1</p>
+                  <p style={{ margin: 0, fontSize: '0.65rem', fontWeight: '600', color: 'var(--text-secondary)' }}>Multi-Site Coverage Prediction v4.5.2</p>
               </div>
             </div>
           </div>
@@ -1386,7 +1528,10 @@ function App() {
               ))}
             </select>
             <div className="engineering-summary">
-              Confidence estimate: {confidenceScore.toFixed(0)}% · clutter uncertainty ±{clutterProfile.uncertaintyDb} dB
+              Confidence estimate: {confidenceScore.toFixed(0)}% · {modelReliability.label} reliability · clutter uncertainty ±{clutterProfile.uncertaintyDb} dB
+            </div>
+            <div className="mode-note">
+              {modelReliability.notes[0]}
             </div>
           </div>
 

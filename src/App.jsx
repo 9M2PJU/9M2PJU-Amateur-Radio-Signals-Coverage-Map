@@ -134,6 +134,8 @@ const HAAT_MIN_DISTANCE_KM = 3;
 const HAAT_MAX_DISTANCE_KM = 16;
 const TERRAIN_PROFILE_STEP_KM = 0.5;
 const EFFECTIVE_EARTH_RADIUS_KM = 6371 * (4 / 3);
+const MIN_FREQUENCY_MHZ = 30;
+const MAX_FREQUENCY_MHZ = 30000;
 const MAX_SITES = 4;
 const MAP_MIN_ZOOM = 3;
 const MAP_MAX_ZOOM = 19;
@@ -279,10 +281,24 @@ const calculateAntennaPatternLoss = (bearing, antennaAzimuth, antennaBeamwidth, 
   return clamp(((delta - halfBeamwidth) / Math.max(1, rearStart - halfBeamwidth)) * frontBackRatio, 0, frontBackRatio);
 };
 
+const calculateFreeSpacePathLoss = (freq, distanceKm) => (
+  32.44 + 20 * Math.log10(Math.max(0.001, distanceKm)) + 20 * Math.log10(clamp(freq, MIN_FREQUENCY_MHZ, MAX_FREQUENCY_MHZ))
+);
+
+const calculateShfExcessLoss = (freq, distanceKm) => {
+  const safeFreq = clamp(freq, 3000, MAX_FREQUENCY_MHZ);
+  const frequencyFactor = clamp((safeFreq - 3000) / (MAX_FREQUENCY_MHZ - 3000), 0, 1);
+  return 3 + frequencyFactor * 9 + clamp(distanceKm * 0.02, 0, 8);
+};
+
 const calculatePathLoss = (freq, effectiveHTx, hRx, distanceKm) => {
   if (distanceKm <= 0.1) return 0;
 
-  const safeFreq = clamp(freq, 30, 3000);
+  const safeFreq = clamp(freq, MIN_FREQUENCY_MHZ, MAX_FREQUENCY_MHZ);
+  if (safeFreq > 3000) {
+    return calculateFreeSpacePathLoss(safeFreq, distanceKm) + calculateShfExcessLoss(safeFreq, distanceKm);
+  }
+
   const logFreq = Math.log10(safeFreq);
   const logHTx = Math.log10(clamp(effectiveHTx, 2, 300));
   const safeHRx = clamp(hRx, 1, 30);
@@ -294,10 +310,6 @@ const calculatePathLoss = (freq, effectiveHTx, hRx, distanceKm) => {
 
   return hataUrban - suburbanCorrection + cost231Extension;
 };
-
-const calculateFreeSpacePathLoss = (freq, distanceKm) => (
-  32.44 + 20 * Math.log10(Math.max(0.001, distanceKm)) + 20 * Math.log10(clamp(freq, 30, 3000))
-);
 
 const calculateTerrainRoughness = (radialSamples, siteElevation) => {
   if (!radialSamples.length) return 0;
@@ -1183,7 +1195,7 @@ function App() {
             </div>
             <div>
               <h1 style={{ fontSize: '1.2rem', fontWeight: '900', letterSpacing: '0.5px' }}>9M2PJU Coverage Prediction</h1>
-              <p style={{ fontSize: '0.75rem', fontWeight: '600' }}>Multi-Site Coverage Prediction v4.5</p>
+              <p style={{ fontSize: '0.75rem', fontWeight: '600' }}>Multi-Site Coverage Prediction v4.5.1</p>
             </div>
           </div>
         </div>
@@ -1196,7 +1208,7 @@ function App() {
               <img src="/brand_logo_v6.png" alt="Logo" style={{ width: '32px', height: '32px', objectFit: 'contain' }} />
               <div>
                 <h1 style={{ margin: 0, fontSize: '1.1rem', fontWeight: '900', color: 'var(--title-blue)', letterSpacing: '0.5px' }}>9M2PJU Coverage Prediction</h1>
-                <p style={{ margin: 0, fontSize: '0.65rem', fontWeight: '600', color: 'var(--text-secondary)' }}>Multi-Site Coverage Prediction v4.5</p>
+                  <p style={{ margin: 0, fontSize: '0.65rem', fontWeight: '600', color: 'var(--text-secondary)' }}>Multi-Site Coverage Prediction v4.5.1</p>
               </div>
             </div>
           </div>
@@ -1306,16 +1318,16 @@ function App() {
           <div className="control-group">
             <label><Layers size={12} style={{ marginRight: '6px' }} /> TOWER HEIGHT: {hTx}m AGL</label>
             <div className="slider-container">
-              <input type="range" min="0" max="100" value={hTx} onChange={(e) => setHTx(Number(e.target.value))} />
+              <input type="range" min="0" max="300" value={hTx} onChange={(e) => setHTx(Number(e.target.value))} />
               <input
                 className="numeric-input"
                 type="number"
                 min="0"
-                max="100"
+                max="300"
                 step="1"
                 value={hTx}
                 aria-label="Tower height above ground in meters"
-                onChange={(e) => setHTx(clamp(Number(e.target.value), 0, 100))}
+                onChange={(e) => setHTx(clamp(Number(e.target.value), 0, 300))}
               />
             </div>
           </div>
@@ -1327,7 +1339,7 @@ function App() {
 
           <div className="control-group">
             <label><Activity size={12} style={{ marginRight: '6px' }} /> RX HEIGHT: {hRx.toFixed(1)}m AGL</label>
-            <input type="range" min="1" max="15" step="0.5" value={hRx} onChange={(e) => setHRx(Number(e.target.value))} />
+            <input type="range" min="1" max="30" step="0.5" value={hRx} onChange={(e) => setHRx(Number(e.target.value))} />
           </div>
 
           <div className="control-group">
@@ -1340,7 +1352,7 @@ function App() {
                 const nextProfile = MODE_PROFILES[nextMode] ?? MODE_PROFILES.fm;
                 setModeKey(nextMode);
                 setFreq(nextProfile.defaultFreq);
-                setFreqBand(nextProfile.defaultFreq < 300 ? 'vhf' : 'uhf');
+                setFreqBand(nextProfile.defaultFreq < 300 ? 'vhf' : nextProfile.defaultFreq < 3000 ? 'uhf' : 'shf');
                 setReceiverBandwidth(nextProfile.defaultBandwidth);
                 setRequiredSnr(nextProfile.defaultRequiredSnr);
               }}
@@ -1428,13 +1440,17 @@ function App() {
               <button
                 onClick={() => { setFreqBand('uhf'); setFreq(430); }}
                 style={{ flex: 1, padding: '6px', fontSize: '0.75rem', borderRadius: '8px', border: '1px solid #ddd', background: freqBand === 'uhf' ? '#0072ff' : 'white', color: freqBand === 'uhf' ? 'white' : '#333', fontWeight: 'bold' }}
-              >UHF/SHF (300-3000)</button>
+              >UHF (300-3000)</button>
+              <button
+                onClick={() => { setFreqBand('shf'); setFreq(5600); }}
+                style={{ flex: 1, padding: '6px', fontSize: '0.75rem', borderRadius: '8px', border: '1px solid #ddd', background: freqBand === 'shf' ? '#0072ff' : 'white', color: freqBand === 'shf' ? 'white' : '#333', fontWeight: 'bold' }}
+              >SHF (3-30GHz)</button>
             </div>
             <label>FREQUENCY: {freq}MHz</label>
             <input
               type="range"
-              min={freqBand === 'vhf' ? 30 : 300}
-              max={freqBand === 'vhf' ? 300 : 3000}
+              min={freqBand === 'vhf' ? 30 : freqBand === 'uhf' ? 300 : 3000}
+              max={freqBand === 'vhf' ? 300 : freqBand === 'uhf' ? 3000 : 30000}
               value={freq}
               onChange={(e) => setFreq(Number(e.target.value))}
             />

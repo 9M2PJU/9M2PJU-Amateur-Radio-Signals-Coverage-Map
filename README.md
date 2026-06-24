@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Version-v4.5-0072ff?style=for-the-badge" alt="Version v4.5">
+  <img src="https://img.shields.io/badge/Version-v4.5.1-0072ff?style=for-the-badge" alt="Version v4.5.1">
   <img src="https://img.shields.io/badge/Live-coverage.hamradio.my-0072ff?style=for-the-badge&logo=react" alt="Live">
   <img src="https://img.shields.io/badge/Engine-Hata_%2B_Terrain-blueviolet?style=for-the-badge" alt="Engine">
   <img src="https://img.shields.io/badge/Mobile-Responsive-success?style=for-the-badge&logo=apple" alt="Mobile">
@@ -29,7 +29,7 @@
 
 **9M2PJU Coverage Prediction** is a browser-based RF coverage planning tool for amateur radio operators. It predicts practical signal coverage from one or more transmitter sites by combining radio path loss, transmitter parameters, antenna height, receiver height, terrain elevation, and map-based visualization.
 
-[**Launch v4.5 Dashboard**](https://coverage.hamradio.my)
+[**Launch v4.5.1 Dashboard**](https://coverage.hamradio.my)
 
 The app is designed for fast field planning: choose a transmitter location, adjust RF parameters, run the prediction, and inspect the expected strong, moderate, and fringe coverage zones directly on a map.
 
@@ -37,10 +37,10 @@ This app uses Hata-style path loss plus sampled terrain/Fresnel obstruction, so 
 
 ---
 
-## What Changed in v4.5
+## What Changed in v4.5.1
 
 - Renamed the app to **9M2PJU Coverage Prediction**.
-- Updated the subtitle to **Multi-Site Coverage Prediction v4.5**.
+- Updated the subtitle to **Multi-Site Coverage Prediction v4.5.1**.
 - Added support for up to 4 transmitter coverage sites.
 - Added combined coverage metrics across all active sites.
 - Added multiple base map layers while keeping standard OpenStreetMap as the default.
@@ -49,7 +49,7 @@ This app uses Hata-style path loss plus sampled terrain/Fresnel obstruction, so 
 - Reworked the mobile and desktop layout for better browser compatibility.
 - Added PWA metadata and offline app-shell caching for install support on mobile and desktop browsers.
 - Fixed generated bundle linting by excluding deployed `docs/` output from ESLint.
-- Updated project metadata to version `4.5.0`.
+- Updated project metadata to version `4.5.1`.
 
 ---
 
@@ -82,10 +82,10 @@ The model responds to:
 - Antenna gain in dBi.
 - Directional antenna azimuth, beamwidth, and front-to-back ratio.
 - Feedline loss, receiver antenna gain, receiver noise figure, required SNR, receiver bandwidth, and fade margin.
-- Receiver height above ground.
+- Receiver height above ground from 1 m to 30 m.
 - Mode-specific receiver bandwidth and required SNR defaults.
-- Frequency band and exact frequency.
-- Tower height above ground from 0 m to 100 m.
+- VHF, UHF, and SHF band selectors with exact frequency control from 30 MHz to 30 GHz.
+- Tower height above ground from 0 m to 300 m.
 - Site elevation and surrounding terrain.
 
 ### Field Validation
@@ -151,7 +151,7 @@ This makes a hilltop site behave differently from a site surrounded by higher te
 
 ### 3. Path Loss
 
-The base RF model uses an Okumura-Hata style suburban path loss calculation:
+For VHF and UHF up to 3000 MHz, the base RF model uses an Okumura-Hata style suburban path loss calculation:
 
 ```text
 Lb = 69.55 + 26.16 log10(f) - 13.82 log10(hTx)
@@ -166,7 +166,7 @@ Where:
 - `d` is distance in kilometers.
 - `a(hRx)` is the receiver height correction factor.
 
-The implementation also applies a suburban correction and a simple extension for higher UHF/SHF frequencies.
+The implementation also applies a suburban correction and a simple higher-UHF extension. Above 3000 MHz, the app switches to a SHF planning approximation based on free-space path loss plus a small SHF excess-loss margin, with terrain, curvature/refraction, and Fresnel clearance still applied separately.
 
 ### 4. Terrain Penalty
 
@@ -182,7 +182,7 @@ This creates shorter coverage in blocked directions and longer coverage in clear
 
 ### 4b. Engineering Adjustments
 
-The v4.5 engineering framework extends the link budget with:
+The v4.5.1 engineering framework extends the link budget with:
 
 ```text
 usable budget = TX dBm + TX antenna gain + RX antenna gain
@@ -245,7 +245,8 @@ What is considered reliable enough for planning:
 - TX power is converted with `Ptx dBm = 10 log10(Pwatts * 1000)`.
 - Antenna gain is added directly to the link budget as dBi.
 - Coverage is found where `path loss + terrain penalty` stays below `Ptx dBm + antenna gain - receiver threshold`.
-- The Hata-style suburban path loss equation matches the common Okumura-Hata form and suburban correction.
+- The Hata-style suburban path loss equation matches the common Okumura-Hata form and suburban correction for VHF/UHF planning.
+- SHF uses free-space path loss plus terrain, curvature/refraction, Fresnel clearance, and a practical SHF excess-loss margin instead of extending Hata beyond its useful range.
 - The terrain penalty uses interpolated line-of-sight clearance, 4/3-earth curvature/refraction correction, 60% first Fresnel clearance, and a knife-edge diffraction-style loss approximation.
 - LoRa, APRS, SSB, and FM profiles are modeled by changing receiver threshold/link-margin bands, not by changing the propagation physics.
 
@@ -254,7 +255,7 @@ Known reliability limits:
 - Okumura-Hata is empirical. It is strongest for macro-style outdoor links, not indoor handheld operation or street-canyon/building-level prediction.
 - The ITM-style hybrid mode is an approximation inspired by Longley-Rice/ITM behavior, not a certified ITM implementation.
 - The original Hata model is normally bounded around 150-1500 MHz, base antenna heights around 30-200 m, mobile heights around 1-10 m, and moderate link distances. This app extends the idea for amateur planning across 30-3000 MHz and clamps antenna heights internally to keep the math stable.
-- The UHF/SHF extension is a practical approximation, not a full ITU-R P.1546, Longley-Rice/ITM, or ray-tracing implementation.
+- SHF support from 3-30 GHz is a practical line-of-sight planning approximation, not a full ITU-R P.452/P.530, Longley-Rice/ITM, rain-fade, or ray-tracing implementation.
 - Terrain is sampled at fixed radial distances out to 120 km and interpolated at 0.5 km clearance intervals. Very small terrain features between sample points, especially buildings and near-street obstructions, can still be missed.
 - The LoRa presets use typical sensitivity-style thresholds for SF7/SF9/SF12 at 125 kHz. Real LoRa reliability also depends on bandwidth, coding rate, payload length, interference, duty cycle, receiver implementation, and local regulations.
 - Feedline loss, receiver antenna gain, polarization mismatch, foliage, buildings, noise floor, interference, weather, and antenna radiation patterns are not fully modeled.

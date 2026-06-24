@@ -123,8 +123,10 @@ const MAP_MIN_ZOOM = 3;
 const MAP_MAX_ZOOM = 19;
 const WORLD_BOUNDS = [[-85, -180], [85, 180]];
 const FALLBACK_TILE_URL = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256"%3E%3Crect width="256" height="256" fill="%23d8eef8"/%3E%3Cpath d="M0 64h256M0 128h256M0 192h256M64 0v256M128 0v256M192 0v256" stroke="%23b5d2df" stroke-width="1" opacity=".55"/%3E%3C/svg%3E';
-// const ELEVATION_ENDPOINT = 'https://api.open-elevation.com/api/v1/lookup';
-const ELEVATION_ENDPOINT = 'https://elevation.hamradio.my/api/v1/lookup';
+const ELEVATION_ENDPOINTS = [
+  'https://elevation.hamradio.my/api/v1/lookup',
+  'https://api.open-elevation.com/api/v1/lookup',
+];
 const ELEVATION_CHUNK_SIZE = 60;
 const ELEVATION_TIMEOUT_MS = 12000;
 const ELEVATION_RETRIES = 2;
@@ -386,35 +388,39 @@ const fetchWithTimeout = async (url, options = {}, timeoutMs = ELEVATION_TIMEOUT
 const fetchElevationChunk = async (chunk) => {
   let lastError;
 
-  for (let attempt = 0; attempt <= ELEVATION_RETRIES; attempt++) {
-    try {
-      const resp = await fetchWithTimeout(ELEVATION_ENDPOINT, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          locations: chunk.map(([latitude, longitude]) => ({ latitude, longitude })),
-        }),
-      });
+  for (const endpoint of ELEVATION_ENDPOINTS) {
+    for (let attempt = 0; attempt <= ELEVATION_RETRIES; attempt++) {
+      try {
+        const resp = await fetchWithTimeout(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            locations: chunk.map(([latitude, longitude]) => ({ latitude, longitude })),
+          }),
+        });
 
-      if (!resp.ok) throw new Error(`Elevation lookup failed: ${resp.status}`);
+        if (!resp.ok) throw new Error(`Elevation lookup failed: ${resp.status}`);
 
-      const data = await resp.json();
-      const results = data.results ?? [];
-      if (!Array.isArray(results) || results.length === 0) throw new Error('Elevation lookup returned no results');
+        const data = await resp.json();
+        const results = data.results ?? [];
+        if (!Array.isArray(results) || results.length === 0) throw new Error('Elevation lookup returned no results');
 
-      return {
-        elevations: chunk.map((_, index) => results[index]?.elevation),
-        failed: false,
-      };
-    } catch (error) {
-      lastError = error;
-      if (attempt < ELEVATION_RETRIES) {
-        await delay(450 * (attempt + 1));
+        return {
+          elevations: chunk.map((_, index) => results[index]?.elevation),
+          failed: false,
+        };
+      } catch (error) {
+        lastError = error;
+        if (attempt < ELEVATION_RETRIES) {
+          await delay(450 * (attempt + 1));
+        }
       }
     }
+
+    console.warn(`Elevation endpoint failed; trying next endpoint: ${endpoint}`, lastError?.message ?? lastError);
   }
 
-  console.warn('Elevation chunk failed; using fallback terrain for this chunk:', lastError?.message ?? lastError);
+  console.warn('All elevation endpoints failed; using fallback terrain for this chunk:', lastError?.message ?? lastError);
   return {
     elevations: chunk.map(() => undefined),
     failed: true,

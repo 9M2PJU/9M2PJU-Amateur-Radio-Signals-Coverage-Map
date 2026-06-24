@@ -82,8 +82,8 @@ const PROPAGATION_MODELS = {
     note: 'Adds terrain roughness, horizon, and free-space checks inspired by Longley-Rice/ITM behavior.',
   },
   ntiaItmApi: {
-    label: 'Self-hosted NTIA ITM',
-    note: 'Uses the 9M2PJU self-hosted NTIA Longley-Rice API with local fallback if the API is unavailable.',
+    label: 'ITS Irregular Terrain Model (ITM)',
+    note: 'Uses the 9M2PJU ITS Irregular Terrain Model / Longley-Rice service with local fallback if the service is unavailable.',
   },
 };
 const PROPAGATION_MODEL_OPTIONS = Object.entries(PROPAGATION_MODELS).map(([key, model]) => ({ key, ...model }));
@@ -471,7 +471,7 @@ const getModelReliability = ({ freq, hTx, hRx, propagationModel, fadeMargin }) =
       penalty += 14;
       notes.push('NTIA ITM supports paths up to 20 GHz; higher SHF predictions fall back to local SHF planning.');
     } else {
-      notes.push('Self-hosted NTIA ITM / Longley-Rice is active when the API is reachable.');
+      notes.push('ITS Irregular Terrain Model (ITM) / Longley-Rice is active when the service is reachable.');
     }
   }
 
@@ -1277,7 +1277,7 @@ function App() {
   const [freqBand, setFreqBand] = useState('vhf');
   const [nextSiteId, setNextSiteId] = useState(2);
   const [analysisNotice, setAnalysisNotice] = useState('Ready for coverage prediction.');
-  const [itmApiStatus, setItmApiStatus] = useState({ state: 'unchecked', message: `Self-hosted ITM API: ${ITM_API_URL}` });
+  const [itmApiStatus, setItmApiStatus] = useState({ state: 'unchecked', message: `ITS ITM service: ${ITM_API_URL}` });
   const isAnalyzingRef = useRef(false);
   const sitesRef = useRef(sites);
   const terrainProfileCacheRef = useRef(new Map());
@@ -1457,7 +1457,7 @@ function App() {
         setItmApiStatus({
           state: data.nativeItm ? 'ready' : 'fallback',
           message: data.nativeItm
-            ? `Self-hosted NTIA ITM ready (${data.engine}).`
+            ? `ITS Irregular Terrain Model (ITM) ready (${data.engine}).`
             : `ITM API reachable, native engine unavailable (${data.engine}).`,
         });
       })
@@ -1775,7 +1775,7 @@ function App() {
       } else if (itmApiFallbacks > 0) {
         setItmApiStatus({ state: 'fallback', message: 'ITM API responded, but native NTIA engine was unavailable for this run.' });
       } else {
-        setItmApiStatus({ state: 'ready', message: 'Self-hosted NTIA ITM completed this prediction.' });
+        setItmApiStatus({ state: 'ready', message: 'ITS Irregular Terrain Model (ITM) completed this prediction.' });
       }
     }
 

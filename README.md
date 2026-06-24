@@ -35,14 +35,14 @@
 
 The app is designed for fast field planning: choose a transmitter location, adjust RF parameters, run the prediction, and inspect the expected strong, moderate, and fringe coverage zones directly on a map.
 
-This app uses the self-hosted 9M2PJU NTIA ITM / Longley-Rice API as its default propagation model, with Hata/COST-style and ITM-style local fallback models, sampled terrain/Fresnel obstruction, optional clutter polygons, optional antenna pattern files, SHF rain/atmospheric attenuation, and local measurement calibration. It should give useful planning-grade coverage zones, but real-world results can still differ due to building-level obstructions, foliage detail, local noise, receiver quality, weather, terrain data accuracy, and antenna installation quality.
+This app uses the 9M2PJU ITS Irregular Terrain Model (ITM) / Longley-Rice service as its default propagation model, with Hata/COST-style and ITM-style local fallback models, sampled terrain/Fresnel obstruction, optional clutter polygons, optional antenna pattern files, SHF rain/atmospheric attenuation, and local measurement calibration. It should give useful planning-grade coverage zones, but real-world results can still differ due to building-level obstructions, foliage detail, local noise, receiver quality, weather, terrain data accuracy, and antenna installation quality.
 
 ---
 
 ## What Changed in v4.7.0
 
 - Labeled this release as **Self Hosted ITM Integrated version**.
-- Added **Self-hosted NTIA ITM** as the default engineering model using `https://itm.hamradio.my`.
+- Added **ITS Irregular Terrain Model (ITM)** as the default engineering model using `https://itm.hamradio.my`.
 - Integrated the `/itm/radial` API into coverage polygon generation for native Longley-Rice path-loss samples.
 - Added visible ITM API status in the engineering model panel.
 - Kept local ITM-style fallback when the API is unavailable or frequency is above the NTIA ITM 20 GHz limit.

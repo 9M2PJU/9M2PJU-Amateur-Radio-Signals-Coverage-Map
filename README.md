@@ -107,7 +107,7 @@ These checks cover RF guardrails, linting, and production bundle generation.
 
 ## License
 
-This project is licensed under the **GNU Affero General Public License v3.0**. See `LICENSE` for the full license text.
+This project is licensed under the **GNU Affero General Public License v3.0 or later**. See `LICENSE` for the full license text.
 
 ---
 

@@ -142,7 +142,11 @@ const MAP_LAYERS = [
 const EMPTY_AREAS = { strong: 0, moderate: 0, weak: 0 };
 const EMPTY_POLYGONS = { strong: null, moderate: null, weak: null };
 const RADIALS_COUNT = 72;
-const SAMPLING_INTERVALS_KM = [0.25, 0.5, 1, 2, 4, 6, 8, 10, 12, 16, 24, 32, 48, 64, 96, 120];
+const SAMPLING_INTERVALS_KM = [
+  0.25,
+  0.5,
+  ...Array.from({ length: 120 }, (_, index) => index + 1),
+];
 const RELIABILITY_CHECK_DISTANCES_KM = [0.1, ...SAMPLING_INTERVALS_KM];
 const HAAT_MIN_DISTANCE_KM = 3;
 const HAAT_MAX_DISTANCE_KM = 16;
@@ -165,7 +169,7 @@ const ELEVATION_RETRIES = 2;
 const ELEVATION_CONCURRENCY = 4;
 const PREDICTION_SEARCH_ITERATIONS = 18;
 const ELEVATION_CACHE_STORAGE_KEY = '9m2pju-elevation-cache-v1';
-const ELEVATION_CACHE_MAX_ENTRIES = 2500;
+const ELEVATION_CACHE_MAX_ENTRIES = 40000;
 const ITM_API_URL = (import.meta.env.VITE_ITM_API_URL ?? 'https://itm.hamradio.my').replace(/\/$/, '');
 const ITM_API_TIMEOUT_MS = 18000;
 const ITM_API_DISTANCE_STEP_KM = 0.5;
@@ -751,6 +755,7 @@ const getPredictedSignalForMeasurement = ({
   rainRateMmH,
   atmosphericLossDbPerKm,
   serviceGrades,
+  itmRadialLosses,
 }) => {
   if (!terrainProfile?.radialSampleSets?.length) return null;
 
@@ -761,23 +766,37 @@ const getPredictedSignalForMeasurement = ({
   const effectiveHTx = calculateEffectiveTxHeight(terrainProfile.siteElevation, hTx, radialSamples);
   const antennaPatternLoss = getAntennaPatternLoss({ bearing, antennaAzimuth, antennaBeamwidth, frontBackRatio, antennaPattern });
   const directionalGain = txGain - antennaPatternLoss;
-  const pathLoss = calculateTotalPathLoss({
-    modelKey,
-    freq,
-    effectiveHTx,
-    hTx,
-    hRx,
-    distanceKm,
-    radialSamples,
-    siteElevation: terrainProfile.siteElevation,
-    clutterLossDb,
-    terrainPenaltyCache: new Map(),
-    sitePosition: site.position,
-    bearing,
-    clutterMap,
-    rainRateMmH,
-    atmosphericLossDbPerKm,
-  });
+  const itmPathLoss = modelKey === 'ntiaItmApi'
+    ? getItmApiPathLoss(itmRadialLosses?.[radialIndex], distanceKm)
+    : null;
+  const pathLoss = typeof itmPathLoss === 'number'
+    ? itmPathLoss + calculateExternalLosses({
+      freq,
+      distanceKm,
+      clutterLossDb,
+      sitePosition: site.position,
+      bearing,
+      clutterMap,
+      rainRateMmH,
+      atmosphericLossDbPerKm,
+    })
+    : calculateTotalPathLoss({
+      modelKey,
+      freq,
+      effectiveHTx,
+      hTx,
+      hRx,
+      distanceKm,
+      radialSamples,
+      siteElevation: terrainProfile.siteElevation,
+      clutterLossDb,
+      terrainPenaltyCache: new Map(),
+      sitePosition: site.position,
+      bearing,
+      clutterMap,
+      rainRateMmH,
+      atmosphericLossDbPerKm,
+    });
   const estimatedDbm = powerDbm + directionalGain + rxAntennaGain - systemLossDb - pathLoss + calibrationOffsetDb;
   const predictedGrade = [...serviceGrades]
     .sort((a, b) => b.thresholdDbm - a.thresholdDbm)
@@ -791,6 +810,7 @@ const getPredictedSignalForMeasurement = ({
     bearing,
     effectiveHTx,
     estimatedDbm,
+    predictionEngine: typeof itmPathLoss === 'number' ? 'itm-api' : 'local-fallback',
   };
 };
 
@@ -1341,6 +1361,7 @@ function App() {
           rainRateMmH: rainRate,
           atmosphericLossDbPerKm: atmosphericLoss,
           serviceGrades,
+          itmRadialLosses: site.itmRadialLosses,
         });
 
         if (predictedSignal) {
@@ -1368,6 +1389,7 @@ function App() {
         ...measurement,
         predictedGrade: bestMatch?.gradeKey ?? 'outside',
         predictedSite: bestMatch?.siteName ?? 'No analyzed site',
+        predictionEngine: bestMatch?.predictionEngine ?? 'polygon-threshold',
         estimatedDbm,
         distanceKm: bestMatch?.distanceKm,
         bearing: bestMatch?.bearing,
@@ -1402,6 +1424,17 @@ function App() {
         clutterMapFeatures: clutterMap?.features?.length ?? 0,
         rainRateMmH: rainRate,
         atmosphericLossDbPerKm: atmosphericLoss,
+        radialCount: RADIALS_COUNT,
+        terrainSamplesPerRadial: SAMPLING_INTERVALS_KM.length,
+        terrainMaxDistanceKm: SAMPLING_INTERVALS_KM[SAMPLING_INTERVALS_KM.length - 1],
+        sites: sites.map((site) => ({
+          id: site.id,
+          name: site.name,
+          model: site.model,
+          status: site.status,
+          itmWarningSamples: site.itmWarningSamples ?? 0,
+          itmErrorSamples: site.itmErrorSamples ?? 0,
+        })),
       },
       summary: summarizeErrors(comparisons),
       comparisons,
@@ -1664,8 +1697,11 @@ function App() {
     const newPolygons = { strong: [], moderate: [], weak: [] };
     const radialMargins = [];
     const itmDistanceGrid = createItmDistanceGrid();
+    const itmRadialLosses = Array(RADIALS_COUNT).fill(null);
     let itmApiFailures = 0;
     let itmApiFallbacks = 0;
+    let itmWarningSamples = 0;
+    let itmErrorSamples = 0;
 
     for (let radialIndex = 0; radialIndex < RADIALS_COUNT; radialIndex++) {
       const bearing = (radialIndex * 360) / RADIALS_COUNT;
@@ -1693,6 +1729,9 @@ function App() {
           itmApiLossMap = apiResult?.losses
             ?.filter((loss) => Number.isFinite(loss.distanceKm) && Number.isFinite(loss.lossDb))
             ?.sort((a, b) => a.distanceKm - b.distanceKm) ?? null;
+          itmWarningSamples += itmApiLossMap?.filter((loss) => Number(loss.warnings) > 0).length ?? 0;
+          itmErrorSamples += itmApiLossMap?.filter((loss) => Number(loss.errorCode) !== 0).length ?? 0;
+          itmRadialLosses[radialIndex] = itmApiLossMap;
           if (apiResult && apiResult.nativeItm === false) itmApiFallbacks += 1;
         } catch (error) {
           itmApiFailures += 1;
@@ -1772,6 +1811,10 @@ function App() {
         setItmApiStatus({ state: 'fallback', message: 'Frequency above 20 GHz; local SHF fallback used.' });
       } else if (itmApiFailures > 0) {
         setItmApiStatus({ state: 'error', message: `ITM API failed on ${itmApiFailures}/${RADIALS_COUNT} radials; local fallback filled gaps.` });
+      } else if (itmErrorSamples > 0) {
+        setItmApiStatus({ state: 'warning', message: `ITM completed with ${itmErrorSamples} native error-code sample${itmErrorSamples > 1 ? 's' : ''}; inspect validation before relying on edges.` });
+      } else if (itmWarningSamples > 0) {
+        setItmApiStatus({ state: 'warning', message: `ITM completed with ${itmWarningSamples} warning sample${itmWarningSamples > 1 ? 's' : ''}; prediction is usable but flagged.` });
       } else if (itmApiFallbacks > 0) {
         setItmApiStatus({ state: 'fallback', message: 'ITM API responded, but native NTIA engine was unavailable for this run.' });
       } else {
@@ -1792,6 +1835,9 @@ function App() {
       avgMarginDb,
       model: propagationModel,
       clutter: clutterKey,
+      itmRadialLosses: propagationModel === 'ntiaItmApi' ? itmRadialLosses : null,
+      itmWarningSamples,
+      itmErrorSamples,
       coveragePolygons: newPolygons,
       areas: {
         strong: calculateAreaKm2(newPolygons.strong),
@@ -1918,7 +1964,7 @@ function App() {
             </div>
             <div>
               <h1 style={{ fontSize: '1.2rem', fontWeight: '900', letterSpacing: '0.5px' }}>9M2PJU Coverage Prediction</h1>
-              <p style={{ fontSize: '0.75rem', fontWeight: '600' }}>Multi-Site Coverage Prediction v4.7.0</p>
+              <p style={{ fontSize: '0.75rem', fontWeight: '600' }}>Multi-Site Coverage Prediction v4.7.1</p>
             </div>
           </div>
         </div>
@@ -1931,7 +1977,7 @@ function App() {
               <img src="/brand_logo_v6.png" alt="Logo" style={{ width: '32px', height: '32px', objectFit: 'contain' }} />
               <div>
                 <h1 style={{ margin: 0, fontSize: '1.1rem', fontWeight: '900', color: 'var(--title-blue)', letterSpacing: '0.5px' }}>9M2PJU Coverage Prediction</h1>
-                  <p style={{ margin: 0, fontSize: '0.65rem', fontWeight: '600', color: 'var(--text-secondary)' }}>Multi-Site Coverage Prediction v4.7.0</p>
+                  <p style={{ margin: 0, fontSize: '0.65rem', fontWeight: '600', color: 'var(--text-secondary)' }}>Multi-Site Coverage Prediction v4.7.1</p>
               </div>
             </div>
           </div>
@@ -2098,7 +2144,7 @@ function App() {
             </select>
             <div className="mode-note">{modelProfile.note}</div>
             {propagationModel === 'ntiaItmApi' && (
-              <div className={`analysis-notice ${itmApiStatus.state === 'error' ? 'error' : itmApiStatus.state === 'fallback' ? 'warning' : ''}`}>
+              <div className={`analysis-notice ${itmApiStatus.state === 'error' ? 'error' : ['fallback', 'warning'].includes(itmApiStatus.state) ? 'warning' : ''}`}>
                 {itmApiStatus.message}
               </div>
             )}
@@ -2351,7 +2397,7 @@ function App() {
             </button>
             <h2 id="about-title">About</h2>
             <p>
-              This app uses Hata-style path loss plus sampled terrain/Fresnel obstruction, so it should give useful approximate coverage zones, but real-world results can differ due to buildings, foliage, antenna pattern, local noise, receiver quality, weather, and terrain data accuracy.
+              This app uses ITS Irregular Terrain Model (ITM) when the service is reachable, with local terrain-aware fallback models, so it should give useful planning-grade coverage zones. Real-world results can still differ due to buildings, foliage, antenna pattern, local noise, receiver quality, weather, and terrain data accuracy.
             </p>
             <p>
               In simple words: use this app for planning and estimating coverage, not as certified RF engineering truth. The prediction becomes more reliable when you compare it with real field measurements and adjust the settings.
@@ -2380,7 +2426,7 @@ function App() {
               <dt>Mode profile</dt>
               <dd>Radio mode and signal threshold profile, for example FM voice, APRS, or weak-signal modes.</dd>
               <dt>Engineering model</dt>
-              <dd>Prediction method. Enhanced Hata is fast; ITM-style hybrid is more conservative over rough terrain.</dd>
+              <dd>Prediction method. ITS ITM is the default; local Hata and ITM-style fallback models remain available.</dd>
               <dt>Clutter</dt>
               <dd>Extra loss for the environment, such as open land, suburban, forest, or dense urban areas.</dd>
               <dt>Feedline loss</dt>

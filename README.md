@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Version-v4.7.0-0072ff?style=for-the-badge" alt="Version v4.7.0">
+  <img src="https://img.shields.io/badge/Version-v4.7.1-0072ff?style=for-the-badge" alt="Version v4.7.1">
   <img src="https://img.shields.io/badge/Latest_Stable_by-9M2PJU-4dbd74?style=for-the-badge" alt="Latest Stable by 9M2PJU">
   <img src="https://img.shields.io/badge/Self_Hosted_ITM-Integrated-7c3aed?style=for-the-badge" alt="Self Hosted ITM Integrated">
   <img src="https://img.shields.io/badge/Live-coverage.hamradio.my-0072ff?style=for-the-badge&logo=react" alt="Live">
@@ -31,11 +31,23 @@
 
 **9M2PJU Coverage Prediction** is a browser-based RF coverage planning tool for amateur radio operators. It predicts practical signal coverage from one or more transmitter sites by combining radio path loss, transmitter parameters, antenna height, receiver height, terrain elevation, and map-based visualization.
 
-[**Launch v4.7.0 Dashboard**](https://coverage.hamradio.my)
+[**Launch v4.7.1 Dashboard**](https://coverage.hamradio.my)
 
 The app is designed for fast field planning: choose a transmitter location, adjust RF parameters, run the prediction, and inspect the expected strong, moderate, and fringe coverage zones directly on a map.
 
 This app uses the 9M2PJU ITS Irregular Terrain Model (ITM) / Longley-Rice service as its default propagation model, with Hata/COST-style and ITM-style local fallback models, sampled terrain/Fresnel obstruction, optional clutter polygons, optional antenna pattern files, SHF rain/atmospheric attenuation, and local measurement calibration. It should give useful planning-grade coverage zones, but real-world results can still differ due to building-level obstructions, foliage detail, local noise, receiver quality, weather, terrain data accuracy, and antenna installation quality.
+
+---
+
+## What Changed in v4.7.1
+
+- Improved terrain sampling density to 1 km intervals out to 120 km on every radial, plus near-site 0.25 km and 0.5 km samples.
+- Reused ITM radial loss maps for field-measurement validation so validation reports match the same engine used to draw coverage polygons.
+- Added ITM warning/error-code tracking from native path-loss samples.
+- Added per-measurement `predictionEngine` metadata in validation reports.
+- Added terrain sample count, radial count, and per-site ITM warning/error summaries to validation report assumptions.
+- Strengthened RF smoke tests for path-loss monotonicity, terrain obstruction, ITM interpolation, and reliable-distance behavior.
+- Updated project metadata to version `4.7.1`.
 
 ---
 
@@ -230,7 +242,7 @@ This creates shorter coverage in blocked directions and longer coverage in clear
 
 ### 4b. Engineering Adjustments
 
-The v4.7.0 engineering framework extends the link budget with:
+The v4.7.1 engineering framework extends the link budget with:
 
 ```text
 usable budget = TX dBm + TX antenna gain + RX antenna gain

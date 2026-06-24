@@ -25,36 +25,48 @@ const MODE_PROFILES = {
   fm: {
     label: 'FM Voice',
     defaultFreq: 145,
+    defaultBandwidth: 12500,
+    defaultRequiredSnr: 12,
     thresholds: { strong: -93, moderate: -105, weak: -115 },
     note: 'Analog voice planning thresholds',
   },
   packet: {
     label: 'APRS / Packet',
     defaultFreq: 144.39,
+    defaultBandwidth: 12500,
+    defaultRequiredSnr: 10,
     thresholds: { strong: -100, moderate: -108, weak: -116 },
     note: '1200 baud AFSK-style packet planning',
   },
   ssb: {
     label: 'SSB / Weak Signal',
     defaultFreq: 144.2,
+    defaultBandwidth: 3000,
+    defaultRequiredSnr: 6,
     thresholds: { strong: -105, moderate: -115, weak: -123 },
     note: 'Weak-signal receiver sensitivity profile',
   },
   loraSf7: {
     label: 'LoRa SF7 125k',
     defaultFreq: 433,
+    defaultBandwidth: 125000,
+    defaultRequiredSnr: -7,
     thresholds: { strong: -103, moderate: -113, weak: -123 },
     note: 'LoRa short airtime, lower sensitivity',
   },
   loraSf9: {
     label: 'LoRa SF9 125k',
     defaultFreq: 433,
+    defaultBandwidth: 125000,
+    defaultRequiredSnr: -12,
     thresholds: { strong: -109, moderate: -119, weak: -129 },
     note: 'Balanced LoRa link profile',
   },
   loraSf12: {
     label: 'LoRa SF12 125k',
     defaultFreq: 433,
+    defaultBandwidth: 125000,
+    defaultRequiredSnr: -20,
     thresholds: { strong: -117, moderate: -127, weak: -137 },
     note: 'LoRa longest-range sensitivity profile',
   },
@@ -117,7 +129,11 @@ const MAP_LAYERS = [
 const EMPTY_AREAS = { strong: 0, moderate: 0, weak: 0 };
 const EMPTY_POLYGONS = { strong: null, moderate: null, weak: null };
 const RADIALS_COUNT = 72;
-const SAMPLING_INTERVALS_KM = [1, 2, 4, 6, 8, 10, 12, 16, 24, 32, 48, 64];
+const SAMPLING_INTERVALS_KM = [0.25, 0.5, 1, 2, 4, 6, 8, 10, 12, 16, 24, 32, 48, 64, 96, 120];
+const HAAT_MIN_DISTANCE_KM = 3;
+const HAAT_MAX_DISTANCE_KM = 16;
+const TERRAIN_PROFILE_STEP_KM = 0.5;
+const EFFECTIVE_EARTH_RADIUS_KM = 6371 * (4 / 3);
 const MAX_SITES = 4;
 const MAP_MIN_ZOOM = 3;
 const MAP_MAX_ZOOM = 19;
@@ -236,6 +252,17 @@ const haversineDistanceKm = ([lat1, lon1], [lat2, lon2]) => {
   return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 };
 
+const calculateBearingDegrees = ([lat1, lon1], [lat2, lon2]) => {
+  const phi1 = lat1 * Math.PI / 180;
+  const phi2 = lat2 * Math.PI / 180;
+  const deltaLon = (lon2 - lon1) * Math.PI / 180;
+  const y = Math.sin(deltaLon) * Math.cos(phi2);
+  const x = Math.cos(phi1) * Math.sin(phi2) -
+    Math.sin(phi1) * Math.cos(phi2) * Math.cos(deltaLon);
+
+  return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+};
+
 const normalizeBearingDelta = (bearing, centerBearing) => {
   const delta = Math.abs(((bearing - centerBearing + 540) % 360) - 180);
   return delta;
@@ -298,14 +325,40 @@ const calculateModeThreshold = (gradeThresholdDbm, bandwidthHz, noiseFigureDb, r
 );
 
 const getElevationAtDistance = (radialSamples, distanceKm, fallbackElevation) => {
-  let nearestElevation = fallbackElevation;
+  if (!radialSamples.length || distanceKm <= 0) return fallbackElevation;
 
-  for (const sample of radialSamples) {
-    if (sample.distanceKm > distanceKm) break;
-    nearestElevation = sample.elevation;
+  const firstSample = radialSamples[0];
+  if (distanceKm <= firstSample.distanceKm) {
+    const ratio = clamp(distanceKm / firstSample.distanceKm, 0, 1);
+    return fallbackElevation + (firstSample.elevation - fallbackElevation) * ratio;
   }
 
-  return nearestElevation;
+  for (let index = 1; index < radialSamples.length; index++) {
+    const previous = radialSamples[index - 1];
+    const next = radialSamples[index];
+    if (distanceKm > next.distanceKm) continue;
+
+    const ratio = (distanceKm - previous.distanceKm) / (next.distanceKm - previous.distanceKm);
+    return previous.elevation + (next.elevation - previous.elevation) * clamp(ratio, 0, 1);
+  }
+
+  return radialSamples[radialSamples.length - 1].elevation;
+};
+
+const getTerrainCheckDistances = (radialSamples, radiusKm) => {
+  const distances = new Set();
+
+  for (let distanceKm = TERRAIN_PROFILE_STEP_KM; distanceKm < radiusKm; distanceKm += TERRAIN_PROFILE_STEP_KM) {
+    distances.add(Number(distanceKm.toFixed(3)));
+  }
+
+  radialSamples.forEach((sample) => {
+    if (sample.distanceKm > 0 && sample.distanceKm < radiusKm) {
+      distances.add(Number(sample.distanceKm.toFixed(3)));
+    }
+  });
+
+  return [...distances].sort((a, b) => a - b);
 };
 
 const calculateTerrainPenalty = (radialSamples, radiusKm, siteElevation, hTx, hRx, freq) => {
@@ -317,24 +370,23 @@ const calculateTerrainPenalty = (radialSamples, radiusKm, siteElevation, hTx, hR
   let maxDiffractionLoss = 0;
   let shadowedSamples = 0;
 
-  for (const sample of radialSamples) {
-    if (sample.distanceKm <= 0) continue;
-    if (sample.distanceKm >= radiusKm) break;
-
-    const pathFraction = sample.distanceKm / radiusKm;
+  getTerrainCheckDistances(radialSamples, radiusKm).forEach((distanceKm) => {
+    const pathFraction = distanceKm / radiusKm;
     const lineOfSightHeight = txAmsl + (rxAmsl - txAmsl) * pathFraction;
-    const firstFresnelRadius = 548 * Math.sqrt((sample.distanceKm * (radiusKm - sample.distanceKm)) / (freq * radiusKm));
-    const clearanceDeficit = sample.elevation - (lineOfSightHeight - 0.6 * firstFresnelRadius);
+    const firstFresnelRadius = 548 * Math.sqrt((distanceKm * (radiusKm - distanceKm)) / (freq * radiusKm));
+    const earthBulge = (distanceKm * (radiusKm - distanceKm) * 1000) / (2 * EFFECTIVE_EARTH_RADIUS_KM);
+    const terrainElevation = getElevationAtDistance(radialSamples, distanceKm, siteElevation);
+    const clearanceDeficit = (terrainElevation + earthBulge) - (lineOfSightHeight - 0.6 * firstFresnelRadius);
 
-    if (clearanceDeficit <= 0) continue;
+    if (clearanceDeficit <= 0) return;
 
     shadowedSamples += 1;
-    const d1 = Math.max(1, sample.distanceKm * 1000);
-    const d2 = Math.max(1, (radiusKm - sample.distanceKm) * 1000);
+    const d1 = Math.max(1, distanceKm * 1000);
+    const d2 = Math.max(1, (radiusKm - distanceKm) * 1000);
     const v = clearanceDeficit * Math.sqrt((2 * (d1 + d2)) / (wavelength * d1 * d2));
     const diffractionLoss = v <= -0.78 ? 0 : 6.9 + 20 * Math.log10(Math.sqrt((v - 0.1) ** 2 + 1) + v - 0.1);
     maxDiffractionLoss = Math.max(maxDiffractionLoss, diffractionLoss);
-  }
+  });
 
   if (shadowedSamples === 0) return 0;
 
@@ -347,6 +399,27 @@ const calculateModelPathLoss = ({ modelKey, freq, effectiveHTx, hRx, distanceKm,
   }
 
   return calculatePathLoss(freq, effectiveHTx, hRx, distanceKm);
+};
+
+const calculateEffectiveTxHeight = (siteElevation, hTx, radialSamples) => {
+  if (!radialSamples.length) return clamp(hTx, 2, 300);
+  const haatSamples = radialSamples.filter((sample) => (
+    sample.distanceKm >= HAAT_MIN_DISTANCE_KM && sample.distanceKm <= HAAT_MAX_DISTANCE_KM
+  ));
+  const terrainSamples = haatSamples.length ? haatSamples : radialSamples;
+  const avgElevation = terrainSamples.reduce((total, sample) => total + sample.elevation, 0) / terrainSamples.length;
+  const haat = (siteElevation + hTx) - avgElevation;
+  return clamp(Math.max(hTx, haat), 2, 300);
+};
+
+const calculateRadialHaat = (siteElevation, hTx, radialSamples) => {
+  const haatSamples = radialSamples.filter((sample) => (
+    sample.distanceKm >= HAAT_MIN_DISTANCE_KM && sample.distanceKm <= HAAT_MAX_DISTANCE_KM
+  ));
+  const terrainSamples = haatSamples.length ? haatSamples : radialSamples;
+  if (!terrainSamples.length) return hTx;
+  const avgElevation = terrainSamples.reduce((total, sample) => total + sample.elevation, 0) / terrainSamples.length;
+  return (siteElevation + hTx) - avgElevation;
 };
 
 const findReliableDistance = ({ modelKey, freq, effectiveHTx, hTx, hRx, targetLoss, radialSamples, siteElevation, clutterLossDb, terrainPenaltyCache }) => {
@@ -372,6 +445,59 @@ const findReliableDistance = ({ modelKey, freq, effectiveHTx, hTx, hRx, targetLo
   }
 
   return low;
+};
+
+const getPredictedSignalForMeasurement = ({
+  measurement,
+  site,
+  terrainProfile,
+  modelKey,
+  freq,
+  hTx,
+  hRx,
+  powerDbm,
+  txGain,
+  rxAntennaGain,
+  systemLossDb,
+  clutterLossDb,
+  antennaAzimuth,
+  antennaBeamwidth,
+  frontBackRatio,
+  serviceGrades,
+}) => {
+  if (!terrainProfile?.radialSampleSets?.length) return null;
+
+  const bearing = calculateBearingDegrees(site.position, measurement.position);
+  const radialIndex = Math.round(bearing / (360 / RADIALS_COUNT)) % RADIALS_COUNT;
+  const radialSamples = terrainProfile.radialSampleSets[radialIndex] ?? [];
+  const distanceKm = haversineDistanceKm(site.position, measurement.position);
+  const effectiveHTx = calculateEffectiveTxHeight(terrainProfile.siteElevation, hTx, radialSamples);
+  const antennaPatternLoss = calculateAntennaPatternLoss(bearing, antennaAzimuth, antennaBeamwidth, frontBackRatio);
+  const directionalGain = txGain - antennaPatternLoss;
+  const pathLoss = calculateModelPathLoss({
+    modelKey,
+    freq,
+    effectiveHTx,
+    hRx,
+    distanceKm,
+    radialSamples,
+    siteElevation: terrainProfile.siteElevation,
+  });
+  const terrainPenalty = calculateTerrainPenalty(radialSamples, distanceKm, terrainProfile.siteElevation, hTx, hRx, freq);
+  const estimatedDbm = powerDbm + directionalGain + rxAntennaGain - systemLossDb - pathLoss - terrainPenalty - clutterLossDb;
+  const predictedGrade = [...serviceGrades]
+    .sort((a, b) => b.thresholdDbm - a.thresholdDbm)
+    .find((grade) => estimatedDbm >= grade.thresholdDbm)?.key ?? 'outside';
+
+  return {
+    siteId: site.id,
+    siteName: site.name,
+    gradeKey: predictedGrade,
+    distanceKm,
+    bearing,
+    effectiveHTx,
+    estimatedDbm,
+  };
 };
 
 const fetchWithTimeout = async (url, options = {}, timeoutMs = ELEVATION_TIMEOUT_MS) => {
@@ -638,21 +764,42 @@ function App() {
       let bestMatch = null;
 
       sites.forEach((site) => {
+        const terrainProfile = terrainProfileCacheRef.current.get(getTerrainProfileCacheKey(site.position));
+        const predictedSignal = getPredictedSignalForMeasurement({
+          measurement,
+          site,
+          terrainProfile,
+          modelKey: propagationModel,
+          freq,
+          hTx,
+          hRx,
+          powerDbm,
+          txGain: gain,
+          rxAntennaGain,
+          systemLossDb,
+          clutterLossDb: clutterProfile.lossDb,
+          antennaAzimuth,
+          antennaBeamwidth,
+          frontBackRatio,
+          serviceGrades,
+        });
+
+        if (predictedSignal) {
+          if (!bestMatch || predictedSignal.estimatedDbm > bestMatch.estimatedDbm) {
+            bestMatch = predictedSignal;
+          }
+          return;
+        }
+
         const gradeKey = ['strong', 'moderate', 'weak'].find((key) => pointInPolygon(measurement.position, site.coveragePolygons[key]));
-        const distanceKm = haversineDistanceKm(site.position, measurement.position);
-        if (!gradeKey && bestMatch) return;
-
-        const estimatedDbm = gradeKey
-          ? serviceGrades.find((grade) => grade.key === gradeKey)?.thresholdDbm + (gradeKey === 'strong' ? 8 : gradeKey === 'moderate' ? 5 : 2)
-          : modeProfile.thresholds.weak - 12;
-
-        if (!bestMatch || (gradeKey && !bestMatch.gradeKey) || distanceKm < bestMatch.distanceKm) {
+        if (gradeKey && !bestMatch) {
+          const distanceKm = haversineDistanceKm(site.position, measurement.position);
           bestMatch = {
             siteId: site.id,
             siteName: site.name,
-            gradeKey: gradeKey ?? 'outside',
+            gradeKey,
             distanceKm,
-            estimatedDbm,
+            estimatedDbm: serviceGrades.find((grade) => grade.key === gradeKey)?.thresholdDbm ?? modeProfile.thresholds.weak,
           };
         }
       });
@@ -663,6 +810,8 @@ function App() {
         predictedGrade: bestMatch?.gradeKey ?? 'outside',
         predictedSite: bestMatch?.siteName ?? 'No analyzed site',
         estimatedDbm,
+        distanceKm: bestMatch?.distanceKm,
+        bearing: bestMatch?.bearing,
         errorDb: measurement.measuredDbm - estimatedDbm,
       };
     });
@@ -696,15 +845,22 @@ function App() {
     fadeMargin,
     feedlineLoss,
     frontBackRatio,
+    freq,
+    gain,
+    hRx,
+    hTx,
     measurements,
     modeProfile.thresholds.weak,
     noiseFigure,
+    powerDbm,
     propagationModel,
     receiverBandwidth,
     requiredSnr,
     rxAntennaGain,
     serviceGrades,
     sites,
+    systemLossDb,
+    clutterProfile.lossDb,
   ]);
 
   useEffect(() => {
@@ -855,11 +1011,9 @@ function App() {
       const bearing = (radialIndex * 360) / RADIALS_COUNT;
       const radialSamples = radialSampleSets[radialIndex];
       const terrainPenaltyCache = new Map();
-      const avgElevation = radialSamples.reduce((total, sample) => total + sample.elevation, 0) / radialSamples.length;
-      haatSamples.push(avgElevation);
+      haatSamples.push(calculateRadialHaat(siteElevation, hTx, radialSamples));
 
-      const haat = (siteElevation + hTx) - avgElevation;
-      const effectiveHTx = clamp(hTx + Math.max(0, haat), 2, 300);
+      const effectiveHTx = calculateEffectiveTxHeight(siteElevation, hTx, radialSamples);
       const antennaPatternLoss = calculateAntennaPatternLoss(bearing, antennaAzimuth, antennaBeamwidth, frontBackRatio);
       const directionalGain = gain - antennaPatternLoss;
 
@@ -895,7 +1049,7 @@ function App() {
       });
     }
 
-    const avgHaat = (siteElevation + hTx) - (haatSamples.reduce((total, elevation) => total + elevation, 0) / haatSamples.length);
+    const avgHaat = haatSamples.reduce((total, haat) => total + haat, 0) / haatSamples.length;
     const avgMarginDb = radialMargins.length
       ? radialMargins.reduce((total, margin) => total + margin, 0) / radialMargins.length
       : 0;
@@ -1150,6 +1304,23 @@ function App() {
           </div>
 
           <div className="control-group">
+            <label><Layers size={12} style={{ marginRight: '6px' }} /> TOWER HEIGHT: {hTx}m AGL</label>
+            <div className="slider-container">
+              <input type="range" min="0" max="100" value={hTx} onChange={(e) => setHTx(Number(e.target.value))} />
+              <input
+                className="numeric-input"
+                type="number"
+                min="0"
+                max="100"
+                step="1"
+                value={hTx}
+                aria-label="Tower height above ground in meters"
+                onChange={(e) => setHTx(clamp(Number(e.target.value), 0, 100))}
+              />
+            </div>
+          </div>
+
+          <div className="control-group">
             <label><Activity size={12} style={{ marginRight: '6px' }} /> ANTENNA GAIN: {gain}dBi</label>
             <input type="range" min="0" max="20" value={gain} onChange={(e) => setGain(Number(e.target.value))} />
           </div>
@@ -1170,6 +1341,8 @@ function App() {
                 setModeKey(nextMode);
                 setFreq(nextProfile.defaultFreq);
                 setFreqBand(nextProfile.defaultFreq < 300 ? 'vhf' : 'uhf');
+                setReceiverBandwidth(nextProfile.defaultBandwidth);
+                setRequiredSnr(nextProfile.defaultRequiredSnr);
               }}
             >
               {MODE_OPTIONS.map((option) => (
@@ -1265,23 +1438,6 @@ function App() {
               value={freq}
               onChange={(e) => setFreq(Number(e.target.value))}
             />
-          </div>
-
-          <div className="control-group">
-            <label><Layers size={12} style={{ marginRight: '6px' }} /> TOWER HEIGHT: {hTx}m AGL</label>
-            <div className="slider-container">
-              <input type="range" min="0" max="100" value={hTx} onChange={(e) => setHTx(Number(e.target.value))} />
-              <input
-                className="numeric-input"
-                type="number"
-                min="0"
-                max="100"
-                step="1"
-                value={hTx}
-                aria-label="Tower height above ground in meters"
-                onChange={(e) => setHTx(clamp(Number(e.target.value), 0, 100))}
-              />
-            </div>
           </div>
 
           <div className="control-group" style={{ marginTop: '25px', borderTop: '1px solid var(--glass-border)', paddingTop: '15px' }}>

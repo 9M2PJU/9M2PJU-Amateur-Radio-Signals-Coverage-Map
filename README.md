@@ -83,6 +83,7 @@ The model responds to:
 - Directional antenna azimuth, beamwidth, and front-to-back ratio.
 - Feedline loss, receiver antenna gain, receiver noise figure, required SNR, receiver bandwidth, and fade margin.
 - Receiver height above ground.
+- Mode-specific receiver bandwidth and required SNR defaults.
 - Frequency band and exact frequency.
 - Tower height above ground from 0 m to 100 m.
 - Site elevation and surrounding terrain.
@@ -96,7 +97,7 @@ lat,lon,rssi
 3.1390,101.6869,-82
 ```
 
-GPX imports read `trkpt` or `wpt` coordinates and look for signal values in extension fields named `rssi`, `signal`, `signal_dbm`, `dbm`, or `rx_dbm`. After import, the app shows validation markers on the map and can export a JSON validation report with model assumptions, prediction class, measured dBm, estimated predicted dBm, error, RMSE, median absolute error, and within-6/within-10 dB statistics.
+GPX imports read `trkpt` or `wpt` coordinates and look for signal values in extension fields named `rssi`, `signal`, `signal_dbm`, `dbm`, or `rx_dbm`. After import, the app shows validation markers on the map and can export a JSON validation report with model assumptions, prediction class, measured dBm, calculated predicted dBm at each measurement point, error, RMSE, median absolute error, and within-6/within-10 dB statistics.
 
 ### Map Layers
 
@@ -119,7 +120,7 @@ graph TD
     Params --> Mode["Apply mode-specific receiver thresholds"]
     Mode --> Elevation["Fetch site elevation"]
     Elevation --> Radials["Generate 72 terrain radials"]
-    Radials --> Samples["Sample terrain from 1 km to 64 km"]
+    Radials --> Samples["Sample terrain from 0.25 km to 120 km"]
     Samples --> HAAT["Estimate HAAT and effective TX height"]
     HAAT --> PathLoss["Calculate Hata-style path loss"]
     Samples --> TerrainPenalty["Calculate Fresnel clearance and terrain penalty"]
@@ -134,19 +135,19 @@ graph TD
 
 For each transmitter site, the app generates 72 bearings around the site. Along each bearing it samples terrain at:
 
-`1, 2, 4, 6, 8, 10, 12, 16, 24, 32, 48, and 64 km`
+`0.25, 0.5, 1, 2, 4, 6, 8, 10, 12, 16, 24, 32, 48, 64, 96, and 120 km`
 
 Elevation data is fetched from the Open-Elevation API in batches.
 
 ### 2. HAAT and Effective Height
 
-The app estimates Height Above Average Terrain using the sampled terrain around the transmitter. It then derives an effective transmitter height from:
+The app estimates Height Above Average Terrain using the 3-16 km sampled terrain ring around the transmitter. It then derives an effective transmitter height from:
 
 ```text
-effective height = tower height + positive HAAT contribution
+effective height = max(tower height, antenna AMSL - average 3-16 km terrain)
 ```
 
-This makes a hilltop site behave differently from a site surrounded by higher terrain.
+This makes a hilltop site behave differently from a site surrounded by higher terrain without double-counting tower height.
 
 ### 3. Path Loss
 
@@ -169,9 +170,10 @@ The implementation also applies a suburban correction and a simple extension for
 
 ### 4. Terrain Penalty
 
-For each candidate distance, the app checks sampled terrain along the path:
+For each candidate distance, the app checks an interpolated terrain profile along the path:
 
 - It estimates the line-of-sight height between transmitter and receiver.
+- It applies 4/3-earth effective-radius curvature/refraction correction.
 - It estimates first Fresnel zone clearance.
 - If terrain violates the required clearance, it applies a diffraction-style loss penalty.
 - Multiple obstructed samples add extra shadowing loss.
@@ -210,7 +212,7 @@ v = h sqrt(2 (d1 + d2) / (lambda d1 d2))
 J(v) = 6.9 + 20 log10(sqrt((v - 0.1)^2 + 1) + v - 0.1)
 ```
 
-Where `h` is the clearance deficit in meters, `lambda` is wavelength in meters, and `d1`/`d2` are converted to meters for the diffraction calculation. The app also adds a small extra shadowing penalty for multiple obstructed terrain samples.
+Where `h` is the clearance deficit in meters after interpolated terrain and 4/3-earth curvature/refraction correction, `lambda` is wavelength in meters, and `d1`/`d2` are converted to meters for the diffraction calculation. The app also adds a small extra shadowing penalty for multiple obstructed terrain profile points.
 
 ### 5. Mode Profiles and Service Grade Thresholds
 
@@ -222,7 +224,7 @@ The app searches for the maximum distance where total loss stays under each mode
 | Moderate | > -105 dBm | Mobile / usable field coverage |
 | Fringe | > -115 dBm | Weak signal / base station reception |
 
-Other profiles replace those thresholds with receiver-sensitivity-oriented values. LoRa presets model SF7, SF9, and SF12 at 125 kHz bandwidth by using deeper fringe thresholds and stronger signal-margin bands:
+Other profiles replace those thresholds with receiver-sensitivity-oriented values. Selecting a mode also applies matching receiver bandwidth and required SNR defaults, so LoRa SF7/SF9/SF12 use 125 kHz bandwidth with spreading-factor-appropriate SNR assumptions:
 
 | Mode | Strong | Moderate | Fringe |
 | :--- | :--- | :--- | :--- |
@@ -244,7 +246,7 @@ What is considered reliable enough for planning:
 - Antenna gain is added directly to the link budget as dBi.
 - Coverage is found where `path loss + terrain penalty` stays below `Ptx dBm + antenna gain - receiver threshold`.
 - The Hata-style suburban path loss equation matches the common Okumura-Hata form and suburban correction.
-- The terrain penalty uses line-of-sight clearance, 60% first Fresnel clearance, and a knife-edge diffraction-style loss approximation.
+- The terrain penalty uses interpolated line-of-sight clearance, 4/3-earth curvature/refraction correction, 60% first Fresnel clearance, and a knife-edge diffraction-style loss approximation.
 - LoRa, APRS, SSB, and FM profiles are modeled by changing receiver threshold/link-margin bands, not by changing the propagation physics.
 
 Known reliability limits:
@@ -253,7 +255,7 @@ Known reliability limits:
 - The ITM-style hybrid mode is an approximation inspired by Longley-Rice/ITM behavior, not a certified ITM implementation.
 - The original Hata model is normally bounded around 150-1500 MHz, base antenna heights around 30-200 m, mobile heights around 1-10 m, and moderate link distances. This app extends the idea for amateur planning across 30-3000 MHz and clamps antenna heights internally to keep the math stable.
 - The UHF/SHF extension is a practical approximation, not a full ITU-R P.1546, Longley-Rice/ITM, or ray-tracing implementation.
-- Terrain is sampled at fixed radial distances out to 64 km. Predictions beyond that distance still run, but distant terrain detail is less complete.
+- Terrain is sampled at fixed radial distances out to 120 km and interpolated at 0.5 km clearance intervals. Very small terrain features between sample points, especially buildings and near-street obstructions, can still be missed.
 - The LoRa presets use typical sensitivity-style thresholds for SF7/SF9/SF12 at 125 kHz. Real LoRa reliability also depends on bandwidth, coding rate, payload length, interference, duty cycle, receiver implementation, and local regulations.
 - Feedline loss, receiver antenna gain, polarization mismatch, foliage, buildings, noise floor, interference, weather, and antenna radiation patterns are not fully modeled.
 

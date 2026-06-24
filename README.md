@@ -332,6 +332,17 @@ npm run build
 
 `npm run test:rf` checks key RF guardrails, including free-space path-loss floors and SHF rain-loss behavior.
 
+## Self-Hosted ITM / Longley-Rice API
+
+The repository includes a standalone Docker service in [`itm-longley-rice/`](itm-longley-rice/) for self-hosting an NTIA ITM / Longley-Rice API. On a server:
+
+```bash
+cd itm-longley-rice
+docker compose up -d --build
+```
+
+After it is public, use `http://SERVER_IP:8787/health` to confirm it is running, then provide the URL so the web app can be configured to call it.
+
 ---
 
 ## Technology Stack

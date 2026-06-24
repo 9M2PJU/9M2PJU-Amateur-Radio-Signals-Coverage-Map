@@ -1,0 +1,11 @@
+services:
+  itm-longley-rice:
+    build:
+      context: .
+    container_name: 9m2pju-itm-longley-rice
+    ports:
+      - "8787:8787"
+    environment:
+      PORT: 8787
+      CORS_ORIGIN: "*"
+    restart: unless-stopped

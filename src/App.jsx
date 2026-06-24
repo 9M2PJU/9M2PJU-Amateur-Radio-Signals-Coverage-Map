@@ -81,6 +81,10 @@ const PROPAGATION_MODELS = {
     label: 'ITM-style hybrid',
     note: 'Adds terrain roughness, horizon, and free-space checks inspired by Longley-Rice/ITM behavior.',
   },
+  ntiaItmApi: {
+    label: 'Self-hosted NTIA ITM',
+    note: 'Uses the 9M2PJU self-hosted NTIA Longley-Rice API with local fallback if the API is unavailable.',
+  },
 };
 const PROPAGATION_MODEL_OPTIONS = Object.entries(PROPAGATION_MODELS).map(([key, model]) => ({ key, ...model }));
 const CLUTTER_PROFILES = {
@@ -162,6 +166,10 @@ const ELEVATION_CONCURRENCY = 4;
 const PREDICTION_SEARCH_ITERATIONS = 18;
 const ELEVATION_CACHE_STORAGE_KEY = '9m2pju-elevation-cache-v1';
 const ELEVATION_CACHE_MAX_ENTRIES = 2500;
+const ITM_API_URL = (import.meta.env.VITE_ITM_API_URL ?? 'https://itm.hamradio.my').replace(/\/$/, '');
+const ITM_API_TIMEOUT_MS = 18000;
+const ITM_API_DISTANCE_STEP_KM = 0.5;
+const ITM_API_MAX_FREQUENCY_MHZ = 20000;
 
 const loadElevationCache = () => {
   if (typeof window === 'undefined') return new Map();
@@ -458,6 +466,15 @@ const getModelReliability = ({ freq, hTx, hRx, propagationModel, fadeMargin }) =
     notes.push('ITM-style hybrid is conservative, but not a full Longley-Rice implementation.');
   }
 
+  if (propagationModel === 'ntiaItmApi') {
+    if (freq > ITM_API_MAX_FREQUENCY_MHZ) {
+      penalty += 14;
+      notes.push('NTIA ITM supports paths up to 20 GHz; higher SHF predictions fall back to local SHF planning.');
+    } else {
+      notes.push('Self-hosted NTIA ITM / Longley-Rice is active when the API is reachable.');
+    }
+  }
+
   return {
     penalty,
     label: penalty <= 8 ? 'High' : penalty <= 22 ? 'Moderate' : 'Planning only',
@@ -535,7 +552,7 @@ const calculateTerrainPenalty = (radialSamples, radiusKm, siteElevation, hTx, hR
 };
 
 const calculateModelPathLoss = ({ modelKey, freq, effectiveHTx, hRx, distanceKm, radialSamples, siteElevation }) => {
-  if (modelKey === 'itmHybrid') {
+  if (modelKey === 'itmHybrid' || modelKey === 'ntiaItmApi') {
     return calculateItmStylePathLoss({ freq, effectiveHTx, hRx, distanceKm, radialSamples, siteElevation });
   }
 
@@ -786,6 +803,136 @@ const fetchWithTimeout = async (url, options = {}, timeoutMs = ELEVATION_TIMEOUT
   } finally {
     window.clearTimeout(timeoutId);
   }
+};
+
+const createItmDistanceGrid = () => {
+  const distances = new Set([0.1, 0.25, 0.5, 1]);
+  for (let distanceKm = 1.5; distanceKm <= SAMPLING_INTERVALS_KM[SAMPLING_INTERVALS_KM.length - 1]; distanceKm += ITM_API_DISTANCE_STEP_KM) {
+    distances.add(Number(distanceKm.toFixed(3)));
+  }
+  SAMPLING_INTERVALS_KM.forEach((distanceKm) => distances.add(distanceKm));
+  return [...distances].sort((a, b) => a - b);
+};
+
+const fetchItmRadialLosses = async ({
+  freq,
+  hTx,
+  hRx,
+  siteElevation,
+  radialSamples,
+  distancesKm,
+  confidence,
+  reliability,
+}) => {
+  if (!ITM_API_URL || freq > ITM_API_MAX_FREQUENCY_MHZ) return null;
+
+  const resp = await fetchWithTimeout(`${ITM_API_URL}/itm/radial`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      frequencyMhz: freq,
+      txHeightM: hTx,
+      rxHeightM: hRx,
+      siteElevationM: siteElevation,
+      radialSamples,
+      distancesKm,
+      confidence,
+      reliability,
+      climate: 1,
+      polarization: 1,
+      groundPermittivity: 15,
+      groundConductivity: 0.005,
+      surfaceRefractivity: 301,
+    }),
+  }, ITM_API_TIMEOUT_MS);
+
+  if (!resp.ok) throw new Error(`ITM API failed: ${resp.status}`);
+  const data = await resp.json();
+  if (!Array.isArray(data.losses)) throw new Error('ITM API returned no loss array');
+  return data;
+};
+
+const getItmApiPathLoss = (itmLossMap, distanceKm) => {
+  if (!itmLossMap?.length) return null;
+  if (distanceKm <= itmLossMap[0].distanceKm) return itmLossMap[0].lossDb;
+
+  for (let index = 1; index < itmLossMap.length; index++) {
+    const previous = itmLossMap[index - 1];
+    const next = itmLossMap[index];
+    if (distanceKm > next.distanceKm) continue;
+
+    const ratio = (distanceKm - previous.distanceKm) / Math.max(1e-9, next.distanceKm - previous.distanceKm);
+    return previous.lossDb + (next.lossDb - previous.lossDb) * clamp(ratio, 0, 1);
+  }
+
+  return itmLossMap[itmLossMap.length - 1].lossDb;
+};
+
+const calculateExternalLosses = ({
+  freq,
+  distanceKm,
+  clutterLossDb,
+  sitePosition,
+  bearing,
+  clutterMap,
+  rainRateMmH,
+  atmosphericLossDbPerKm,
+}) => (
+  clutterLossDb +
+  calculateMappedClutterLoss({ sitePosition, bearing, distanceKm, clutterMap }) +
+  calculateShfRainLoss(freq, distanceKm, rainRateMmH) +
+  calculateAtmosphericLoss(freq, distanceKm, atmosphericLossDbPerKm)
+);
+
+const findReliableDistanceFromLossMap = ({
+  itmLossMap,
+  freq,
+  targetLoss,
+  clutterLossDb,
+  sitePosition,
+  bearing,
+  clutterMap,
+  rainRateMmH,
+  atmosphericLossDbPerKm,
+}) => {
+  if (!itmLossMap?.length) return null;
+  let lastPassing = itmLossMap[0].distanceKm;
+  let lastLoss = itmLossMap[0].lossDb + calculateExternalLosses({
+    freq,
+    distanceKm: itmLossMap[0].distanceKm,
+    clutterLossDb,
+    sitePosition,
+    bearing,
+    clutterMap,
+    rainRateMmH,
+    atmosphericLossDbPerKm,
+  });
+
+  if (lastLoss > targetLoss) return lastPassing;
+
+  for (let index = 1; index < itmLossMap.length; index++) {
+    const sample = itmLossMap[index];
+    const totalLoss = sample.lossDb + calculateExternalLosses({
+      freq,
+      distanceKm: sample.distanceKm,
+      clutterLossDb,
+      sitePosition,
+      bearing,
+      clutterMap,
+      rainRateMmH,
+      atmosphericLossDbPerKm,
+    });
+
+    if (totalLoss > targetLoss) {
+      const ratio = clamp((targetLoss - lastLoss) / Math.max(1e-9, totalLoss - lastLoss), 0, 1);
+      return lastPassing + (sample.distanceKm - lastPassing) * ratio;
+    }
+
+    lastPassing = sample.distanceKm;
+    lastLoss = totalLoss;
+  }
+
+  return lastPassing;
 };
 
 const fetchElevationChunk = async (chunk) => {
@@ -1103,7 +1250,7 @@ function App() {
   const [gain, setGain] = useState(6);
   const [hRx, setHRx] = useState(1.5);
   const [modeKey, setModeKey] = useState('fm');
-  const [propagationModel, setPropagationModel] = useState('enhancedHata');
+  const [propagationModel, setPropagationModel] = useState('ntiaItmApi');
   const [clutterKey, setClutterKey] = useState('suburban');
   const [feedlineLoss, setFeedlineLoss] = useState(1);
   const [rxAntennaGain, setRxAntennaGain] = useState(0);
@@ -1130,6 +1277,7 @@ function App() {
   const [freqBand, setFreqBand] = useState('vhf');
   const [nextSiteId, setNextSiteId] = useState(2);
   const [analysisNotice, setAnalysisNotice] = useState('Ready for coverage prediction.');
+  const [itmApiStatus, setItmApiStatus] = useState({ state: 'unchecked', message: `Self-hosted ITM API: ${ITM_API_URL}` });
   const isAnalyzingRef = useRef(false);
   const sitesRef = useRef(sites);
   const terrainProfileCacheRef = useRef(new Map());
@@ -1160,7 +1308,7 @@ function App() {
     fadeMargin,
   }), [fadeMargin, freq, hRx, hTx, propagationModel]);
   const confidenceScore = clamp(
-    100 - clutterProfile.uncertaintyDb * 2 - fadeMargin * 0.7 - modelReliability.penalty - (propagationModel === 'itmHybrid' ? 4 : 9),
+    100 - clutterProfile.uncertaintyDb * 2 - fadeMargin * 0.7 - modelReliability.penalty - (propagationModel === 'ntiaItmApi' ? 2 : propagationModel === 'itmHybrid' ? 4 : 9),
     35,
     95,
   );
@@ -1246,6 +1394,8 @@ function App() {
         confidenceScore,
         reliability: modelReliability.label,
         reliabilityNotes: modelReliability.notes,
+        itmApiUrl: propagationModel === 'ntiaItmApi' ? ITM_API_URL : null,
+        itmApiStatus: propagationModel === 'ntiaItmApi' ? itmApiStatus : null,
         calibrationEnabled,
         calibrationOffsetDb: activeCalibrationOffset,
         antennaPatternPoints: antennaPattern?.points?.length ?? 0,
@@ -1277,6 +1427,7 @@ function App() {
     modeProfile.thresholds.weak,
     modelReliability.label,
     modelReliability.notes,
+    itmApiStatus,
     noiseFigure,
     powerDbm,
     propagationModel,
@@ -1293,6 +1444,32 @@ function App() {
   useEffect(() => {
     sitesRef.current = sites;
   }, [sites]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchWithTimeout(`${ITM_API_URL}/health`, {}, 5000)
+      .then(async (resp) => {
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        return resp.json();
+      })
+      .then((data) => {
+        if (cancelled) return;
+        setItmApiStatus({
+          state: data.nativeItm ? 'ready' : 'fallback',
+          message: data.nativeItm
+            ? `Self-hosted NTIA ITM ready (${data.engine}).`
+            : `ITM API reachable, native engine unavailable (${data.engine}).`,
+        });
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setItmApiStatus({ state: 'error', message: `ITM API unavailable: ${error.message}` });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if ('geolocation' in navigator) {
@@ -1486,6 +1663,9 @@ function App() {
     const haatSamples = [];
     const newPolygons = { strong: [], moderate: [], weak: [] };
     const radialMargins = [];
+    const itmDistanceGrid = createItmDistanceGrid();
+    let itmApiFailures = 0;
+    let itmApiFallbacks = 0;
 
     for (let radialIndex = 0; radialIndex < RADIALS_COUNT; radialIndex++) {
       const bearing = (radialIndex * 360) / RADIALS_COUNT;
@@ -1496,10 +1676,44 @@ function App() {
       const effectiveHTx = calculateEffectiveTxHeight(siteElevation, hTx, radialSamples);
       const antennaPatternLoss = getAntennaPatternLoss({ bearing, antennaAzimuth, antennaBeamwidth, frontBackRatio, antennaPattern });
       const directionalGain = gain - antennaPatternLoss;
+      let itmApiLossMap = null;
+
+      if (propagationModel === 'ntiaItmApi' && freq <= ITM_API_MAX_FREQUENCY_MHZ) {
+        try {
+          const apiResult = await fetchItmRadialLosses({
+            freq,
+            hTx,
+            hRx,
+            siteElevation,
+            radialSamples,
+            distancesKm: itmDistanceGrid,
+            confidence: confidenceScore,
+            reliability: Math.max(50, confidenceScore),
+          });
+          itmApiLossMap = apiResult?.losses
+            ?.filter((loss) => Number.isFinite(loss.distanceKm) && Number.isFinite(loss.lossDb))
+            ?.sort((a, b) => a.distanceKm - b.distanceKm) ?? null;
+          if (apiResult && apiResult.nativeItm === false) itmApiFallbacks += 1;
+        } catch (error) {
+          itmApiFailures += 1;
+          console.warn(`ITM API radial ${radialIndex} failed; using local fallback`, error);
+        }
+      }
 
       serviceGrades.forEach((grade) => {
         const targetLoss = powerDbm + directionalGain + rxAntennaGain - systemLossDb + activeCalibrationOffset - grade.thresholdDbm;
-        const radius = findReliableDistance({
+        const itmRadius = findReliableDistanceFromLossMap({
+          itmLossMap: itmApiLossMap,
+          freq,
+          targetLoss,
+          clutterLossDb: clutterProfile.lossDb,
+          sitePosition: site.position,
+          bearing,
+          clutterMap,
+          rainRateMmH: rainRate,
+          atmosphericLossDbPerKm: atmosphericLoss,
+        });
+        const radius = itmRadius ?? findReliableDistance({
           modelKey: propagationModel,
           freq,
           effectiveHTx,
@@ -1519,26 +1733,50 @@ function App() {
         newPolygons[grade.key].push(getDestinationPoint(site.position[0], site.position[1], bearing, radius));
 
         if (grade.key === 'weak') {
-          const pathLossAtRadius = calculateTotalPathLoss({
-            modelKey: propagationModel,
-            freq,
-            effectiveHTx,
-            hTx,
-            hRx,
-            distanceKm: radius,
-            radialSamples,
-            siteElevation,
-            clutterLossDb: clutterProfile.lossDb,
-            terrainPenaltyCache,
-            sitePosition: site.position,
-            bearing,
-            clutterMap,
-            rainRateMmH: rainRate,
-            atmosphericLossDbPerKm: atmosphericLoss,
-          });
+          const itmPathLoss = getItmApiPathLoss(itmApiLossMap, radius);
+          const pathLossAtRadius = typeof itmPathLoss === 'number'
+            ? itmPathLoss + calculateExternalLosses({
+              freq,
+              distanceKm: radius,
+              clutterLossDb: clutterProfile.lossDb,
+              sitePosition: site.position,
+              bearing,
+              clutterMap,
+              rainRateMmH: rainRate,
+              atmosphericLossDbPerKm: atmosphericLoss,
+            })
+            : calculateTotalPathLoss({
+              modelKey: propagationModel,
+              freq,
+              effectiveHTx,
+              hTx,
+              hRx,
+              distanceKm: radius,
+              radialSamples,
+              siteElevation,
+              clutterLossDb: clutterProfile.lossDb,
+              terrainPenaltyCache,
+              sitePosition: site.position,
+              bearing,
+              clutterMap,
+              rainRateMmH: rainRate,
+              atmosphericLossDbPerKm: atmosphericLoss,
+            });
           radialMargins.push(targetLoss - pathLossAtRadius);
         }
       });
+    }
+
+    if (propagationModel === 'ntiaItmApi') {
+      if (freq > ITM_API_MAX_FREQUENCY_MHZ) {
+        setItmApiStatus({ state: 'fallback', message: 'Frequency above 20 GHz; local SHF fallback used.' });
+      } else if (itmApiFailures > 0) {
+        setItmApiStatus({ state: 'error', message: `ITM API failed on ${itmApiFailures}/${RADIALS_COUNT} radials; local fallback filled gaps.` });
+      } else if (itmApiFallbacks > 0) {
+        setItmApiStatus({ state: 'fallback', message: 'ITM API responded, but native NTIA engine was unavailable for this run.' });
+      } else {
+        setItmApiStatus({ state: 'ready', message: 'Self-hosted NTIA ITM completed this prediction.' });
+      }
     }
 
     const avgHaat = haatSamples.reduce((total, haat) => total + haat, 0) / haatSamples.length;
@@ -1680,7 +1918,7 @@ function App() {
             </div>
             <div>
               <h1 style={{ fontSize: '1.2rem', fontWeight: '900', letterSpacing: '0.5px' }}>9M2PJU Coverage Prediction</h1>
-              <p style={{ fontSize: '0.75rem', fontWeight: '600' }}>Multi-Site Coverage Prediction v4.6.0</p>
+              <p style={{ fontSize: '0.75rem', fontWeight: '600' }}>Multi-Site Coverage Prediction v4.7.0</p>
             </div>
           </div>
         </div>
@@ -1693,7 +1931,7 @@ function App() {
               <img src="/brand_logo_v6.png" alt="Logo" style={{ width: '32px', height: '32px', objectFit: 'contain' }} />
               <div>
                 <h1 style={{ margin: 0, fontSize: '1.1rem', fontWeight: '900', color: 'var(--title-blue)', letterSpacing: '0.5px' }}>9M2PJU Coverage Prediction</h1>
-                  <p style={{ margin: 0, fontSize: '0.65rem', fontWeight: '600', color: 'var(--text-secondary)' }}>Multi-Site Coverage Prediction v4.6.0</p>
+                  <p style={{ margin: 0, fontSize: '0.65rem', fontWeight: '600', color: 'var(--text-secondary)' }}>Multi-Site Coverage Prediction v4.7.0</p>
               </div>
             </div>
           </div>
@@ -1859,6 +2097,11 @@ function App() {
               ))}
             </select>
             <div className="mode-note">{modelProfile.note}</div>
+            {propagationModel === 'ntiaItmApi' && (
+              <div className={`analysis-notice ${itmApiStatus.state === 'error' ? 'error' : itmApiStatus.state === 'fallback' ? 'warning' : ''}`}>
+                {itmApiStatus.message}
+              </div>
+            )}
             <select className="mode-select stacked-select" value={clutterKey} onChange={(e) => setClutterKey(e.target.value)}>
               {CLUTTER_OPTIONS.map((option) => (
                 <option key={option.key} value={option.key}>{option.label} (+{option.lossDb} dB)</option>

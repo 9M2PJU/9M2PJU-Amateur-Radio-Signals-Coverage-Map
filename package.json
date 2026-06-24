@@ -1,12 +1,13 @@
 {
   "name": "9m2pju-amateur-radio-signals-coverage-map",
   "private": true,
-  "version": "4.5.2",
+  "version": "4.6.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
+    "test:rf": "node scripts/rf-smoke-test.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

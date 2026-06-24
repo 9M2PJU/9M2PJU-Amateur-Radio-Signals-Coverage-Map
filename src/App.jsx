@@ -90,6 +90,10 @@ const CLUTTER_PROFILES = {
   urban: { label: 'Dense urban', lossDb: 18, uncertaintyDb: 12 },
 };
 const CLUTTER_OPTIONS = Object.entries(CLUTTER_PROFILES).map(([key, profile]) => ({ key, ...profile }));
+const DEFAULT_SHF_RAIN_RATE_MM_H = 25;
+const DEFAULT_ATMOSPHERIC_LOSS_DB_PER_KM = 0.01;
+const CLUTTER_MAP_SAMPLE_KM = 2;
+const UNION_AREA_GRID_CELLS = 96;
 const BANDWIDTH_OPTIONS = [
   { label: '12.5 kHz narrow FM', value: 12500 },
   { label: '25 kHz FM', value: 25000 },
@@ -287,6 +291,31 @@ const calculateAntennaPatternLoss = (bearing, antennaAzimuth, antennaBeamwidth, 
   return clamp(((delta - halfBeamwidth) / Math.max(1, rearStart - halfBeamwidth)) * frontBackRatio, 0, frontBackRatio);
 };
 
+const interpolateAntennaPatternLoss = (bearing, antennaPattern) => {
+  if (!antennaPattern?.points?.length) return null;
+  const normalizedBearing = ((bearing % 360) + 360) % 360;
+  const points = antennaPattern.points;
+  const extendedPoints = [...points, { ...points[0], angle: points[0].angle + 360 }];
+
+  for (let index = 1; index < extendedPoints.length; index++) {
+    const previous = extendedPoints[index - 1];
+    const next = extendedPoints[index];
+    const targetBearing = normalizedBearing < points[0].angle ? normalizedBearing + 360 : normalizedBearing;
+    if (targetBearing > next.angle) continue;
+
+    const ratio = (targetBearing - previous.angle) / Math.max(1e-9, next.angle - previous.angle);
+    return previous.lossDb + (next.lossDb - previous.lossDb) * clamp(ratio, 0, 1);
+  }
+
+  return points[points.length - 1].lossDb;
+};
+
+const getAntennaPatternLoss = ({ bearing, antennaAzimuth, antennaBeamwidth, frontBackRatio, antennaPattern }) => {
+  const patternLoss = interpolateAntennaPatternLoss(normalizeBearingDelta(bearing, antennaAzimuth), antennaPattern);
+  if (typeof patternLoss === 'number') return patternLoss;
+  return calculateAntennaPatternLoss(bearing, antennaAzimuth, antennaBeamwidth, frontBackRatio);
+};
+
 const calculateFreeSpacePathLoss = (freq, distanceKm) => (
   32.44 + 20 * Math.log10(Math.max(0.001, distanceKm)) + 20 * Math.log10(clamp(freq, MIN_FREQUENCY_MHZ, MAX_FREQUENCY_MHZ))
 );
@@ -322,6 +351,24 @@ const calculateShfExcessLoss = (freq, distanceKm) => {
   const safeFreq = clamp(freq, 3000, MAX_FREQUENCY_MHZ);
   const frequencyFactor = clamp((safeFreq - 3000) / (MAX_FREQUENCY_MHZ - 3000), 0, 1);
   return 3 + frequencyFactor * 9 + clamp(distanceKm * 0.02, 0, 8);
+};
+
+const calculateShfRainLoss = (freq, distanceKm, rainRateMmH) => {
+  if (freq < 3000 || rainRateMmH <= 0 || distanceKm <= 0) return 0;
+  const freqGhz = freq / 1000;
+  const k = clamp(0.00012 * (freqGhz ** 1.35), 0, 2.5);
+  const alpha = clamp(0.82 + 0.03 * Math.log10(Math.max(1, freqGhz)), 0.75, 1.15);
+  const effectiveDistanceKm = distanceKm / (1 + distanceKm / 35);
+  return clamp(k * (rainRateMmH ** alpha) * effectiveDistanceKm, 0, 45);
+};
+
+const calculateAtmosphericLoss = (freq, distanceKm, atmosphericLossDbPerKm) => {
+  if (freq < 3000 || distanceKm <= 0) return 0;
+  const freqGhz = freq / 1000;
+  const oxygenWaterLossDbPerKm = atmosphericLossDbPerKm + (
+    freqGhz > 10 ? (freqGhz - 10) * 0.002 : 0
+  );
+  return clamp(oxygenWaterLossDbPerKm * distanceKm, 0, 20);
 };
 
 const calculatePathLoss = (freq, effectiveHTx, hRx, distanceKm) => {
@@ -516,7 +563,43 @@ const calculateRadialHaat = (siteElevation, hTx, radialSamples) => {
   return (siteElevation + hTx) - avgElevation;
 };
 
-const calculateTotalPathLoss = ({ modelKey, freq, effectiveHTx, hTx, hRx, distanceKm, radialSamples, siteElevation, clutterLossDb, terrainPenaltyCache }) => {
+const calculateMappedClutterLoss = ({ sitePosition, bearing, distanceKm, clutterMap }) => {
+  if (!clutterMap?.features?.length || distanceKm <= 0) return 0;
+  let sampledLoss = 0;
+  let samples = 0;
+
+  for (let sampleKm = CLUTTER_MAP_SAMPLE_KM; sampleKm < distanceKm; sampleKm += CLUTTER_MAP_SAMPLE_KM) {
+    const point = getDestinationPoint(sitePosition[0], sitePosition[1], bearing, sampleKm);
+    const featureLoss = clutterMap.features.reduce((loss, feature) => (
+      feature.lossDb > loss && pointInGeoJsonFeature(point, feature) ? feature.lossDb : loss
+    ), 0);
+    if (featureLoss > 0) {
+      sampledLoss += featureLoss;
+      samples += 1;
+    }
+  }
+
+  if (samples === 0) return 0;
+  return clamp((sampledLoss / samples) * clamp(distanceKm / 20, 0.25, 1), 0, 24);
+};
+
+const calculateTotalPathLoss = ({
+  modelKey,
+  freq,
+  effectiveHTx,
+  hTx,
+  hRx,
+  distanceKm,
+  radialSamples,
+  siteElevation,
+  clutterLossDb,
+  terrainPenaltyCache,
+  sitePosition,
+  bearing,
+  clutterMap,
+  rainRateMmH,
+  atmosphericLossDbPerKm,
+}) => {
   const cacheKey = distanceKm.toFixed(3);
   let terrainPenalty = terrainPenaltyCache?.get(cacheKey);
 
@@ -527,10 +610,29 @@ const calculateTotalPathLoss = ({ modelKey, freq, effectiveHTx, hTx, hRx, distan
 
   return calculateModelPathLoss({ modelKey, freq, effectiveHTx, hRx, distanceKm, radialSamples, siteElevation }) +
     terrainPenalty +
-    clutterLossDb;
+    clutterLossDb +
+    calculateMappedClutterLoss({ sitePosition, bearing, distanceKm, clutterMap }) +
+    calculateShfRainLoss(freq, distanceKm, rainRateMmH) +
+    calculateAtmosphericLoss(freq, distanceKm, atmosphericLossDbPerKm);
 };
 
-const findReliableDistance = ({ modelKey, freq, effectiveHTx, hTx, hRx, targetLoss, radialSamples, siteElevation, clutterLossDb, terrainPenaltyCache }) => {
+const findReliableDistance = ({
+  modelKey,
+  freq,
+  effectiveHTx,
+  hTx,
+  hRx,
+  targetLoss,
+  radialSamples,
+  siteElevation,
+  clutterLossDb,
+  terrainPenaltyCache,
+  sitePosition,
+  bearing,
+  clutterMap,
+  rainRateMmH,
+  atmosphericLossDbPerKm,
+}) => {
   let low = RELIABILITY_CHECK_DISTANCES_KM[0];
   let high = SAMPLING_INTERVALS_KM[SAMPLING_INTERVALS_KM.length - 1];
 
@@ -545,6 +647,11 @@ const findReliableDistance = ({ modelKey, freq, effectiveHTx, hTx, hRx, targetLo
     siteElevation,
     clutterLossDb,
     terrainPenaltyCache,
+    sitePosition,
+    bearing,
+    clutterMap,
+    rainRateMmH,
+    atmosphericLossDbPerKm,
   }) > targetLoss) {
     return low;
   }
@@ -561,6 +668,11 @@ const findReliableDistance = ({ modelKey, freq, effectiveHTx, hTx, hRx, targetLo
       siteElevation,
       clutterLossDb,
       terrainPenaltyCache,
+      sitePosition,
+      bearing,
+      clutterMap,
+      rainRateMmH,
+      atmosphericLossDbPerKm,
     });
 
     if (totalLoss > targetLoss) {
@@ -586,6 +698,11 @@ const findReliableDistance = ({ modelKey, freq, effectiveHTx, hTx, hRx, targetLo
       siteElevation,
       clutterLossDb,
       terrainPenaltyCache,
+      sitePosition,
+      bearing,
+      clutterMap,
+      rainRateMmH,
+      atmosphericLossDbPerKm,
     });
 
     if (totalLoss < targetLoss) low = mid;
@@ -608,9 +725,14 @@ const getPredictedSignalForMeasurement = ({
   rxAntennaGain,
   systemLossDb,
   clutterLossDb,
+  calibrationOffsetDb,
+  antennaPattern,
   antennaAzimuth,
   antennaBeamwidth,
   frontBackRatio,
+  clutterMap,
+  rainRateMmH,
+  atmosphericLossDbPerKm,
   serviceGrades,
 }) => {
   if (!terrainProfile?.radialSampleSets?.length) return null;
@@ -620,19 +742,26 @@ const getPredictedSignalForMeasurement = ({
   const radialSamples = terrainProfile.radialSampleSets[radialIndex] ?? [];
   const distanceKm = haversineDistanceKm(site.position, measurement.position);
   const effectiveHTx = calculateEffectiveTxHeight(terrainProfile.siteElevation, hTx, radialSamples);
-  const antennaPatternLoss = calculateAntennaPatternLoss(bearing, antennaAzimuth, antennaBeamwidth, frontBackRatio);
+  const antennaPatternLoss = getAntennaPatternLoss({ bearing, antennaAzimuth, antennaBeamwidth, frontBackRatio, antennaPattern });
   const directionalGain = txGain - antennaPatternLoss;
-  const pathLoss = calculateModelPathLoss({
+  const pathLoss = calculateTotalPathLoss({
     modelKey,
     freq,
     effectiveHTx,
+    hTx,
     hRx,
     distanceKm,
     radialSamples,
     siteElevation: terrainProfile.siteElevation,
+    clutterLossDb,
+    terrainPenaltyCache: new Map(),
+    sitePosition: site.position,
+    bearing,
+    clutterMap,
+    rainRateMmH,
+    atmosphericLossDbPerKm,
   });
-  const terrainPenalty = calculateTerrainPenalty(radialSamples, distanceKm, terrainProfile.siteElevation, hTx, hRx, freq);
-  const estimatedDbm = powerDbm + directionalGain + rxAntennaGain - systemLossDb - pathLoss - terrainPenalty - clutterLossDb;
+  const estimatedDbm = powerDbm + directionalGain + rxAntennaGain - systemLossDb - pathLoss + calibrationOffsetDb;
   const predictedGrade = [...serviceGrades]
     .sort((a, b) => b.thresholdDbm - a.thresholdDbm)
     .find((grade) => estimatedDbm >= grade.thresholdDbm)?.key ?? 'outside';
@@ -771,6 +900,122 @@ const pointInPolygon = ([lat, lon], polygon) => {
   return inside;
 };
 
+const pointInGeoJsonFeature = (position, feature) => {
+  const geometry = feature?.geometry;
+  if (!geometry) return false;
+
+  const rings = geometry.type === 'Polygon'
+    ? geometry.coordinates
+    : geometry.type === 'MultiPolygon'
+      ? geometry.coordinates.flat()
+      : [];
+
+  return rings.some((ring) => pointInPolygon(position, ring.map(([lon, lat]) => [lat, lon])));
+};
+
+const getPolygonBounds = (polygons) => {
+  const points = polygons.flat().filter(Boolean);
+  if (!points.length) return null;
+
+  return points.reduce((bounds, [lat, lon]) => ({
+    minLat: Math.min(bounds.minLat, lat),
+    maxLat: Math.max(bounds.maxLat, lat),
+    minLon: Math.min(bounds.minLon, lon),
+    maxLon: Math.max(bounds.maxLon, lon),
+  }), {
+    minLat: points[0][0],
+    maxLat: points[0][0],
+    minLon: points[0][1],
+    maxLon: points[0][1],
+  });
+};
+
+const calculateUnionAreaKm2 = (polygons) => {
+  const usablePolygons = polygons.filter((polygon) => polygon?.length >= 3);
+  const bounds = getPolygonBounds(usablePolygons);
+  if (!bounds) return 0;
+
+  const latSpan = Math.max(0.0001, bounds.maxLat - bounds.minLat);
+  const lonSpan = Math.max(0.0001, bounds.maxLon - bounds.minLon);
+  const rows = UNION_AREA_GRID_CELLS;
+  const cols = Math.max(12, Math.round(UNION_AREA_GRID_CELLS * lonSpan / latSpan));
+  const cellLatKm = latSpan * 111.32 / rows;
+  const midLat = (bounds.minLat + bounds.maxLat) / 2;
+  const cellLonKm = lonSpan * 111.32 * Math.cos(midLat * Math.PI / 180) / cols;
+  let coveredCells = 0;
+
+  for (let row = 0; row < rows; row++) {
+    const lat = bounds.minLat + (row + 0.5) * latSpan / rows;
+    for (let col = 0; col < cols; col++) {
+      const lon = bounds.minLon + (col + 0.5) * lonSpan / cols;
+      if (usablePolygons.some((polygon) => pointInPolygon([lat, lon], polygon))) {
+        coveredCells += 1;
+      }
+    }
+  }
+
+  return coveredCells * cellLatKm * cellLonKm;
+};
+
+const calculateCombinedCoverageAreas = (sites) => ({
+  strong: calculateUnionAreaKm2(sites.map((site) => site.coveragePolygons.strong)),
+  moderate: calculateUnionAreaKm2(sites.map((site) => site.coveragePolygons.moderate)),
+  weak: calculateUnionAreaKm2(sites.map((site) => site.coveragePolygons.weak)),
+});
+
+const parseAntennaPatternCsv = (text) => {
+  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (lines.length < 2) return null;
+  const headers = lines[0].split(',').map((header) => header.trim().toLowerCase());
+  const angleIndex = headers.findIndex((header) => ['angle', 'azimuth', 'bearing', 'deg', 'degrees'].includes(header));
+  const lossIndex = headers.findIndex((header) => ['loss', 'lossdb', 'attenuation', 'attenuationdb', 'pattern_loss'].includes(header));
+  const gainIndex = headers.findIndex((header) => ['gain', 'gaindb', 'gain_dbi', 'dbi'].includes(header));
+  if (angleIndex < 0 || (lossIndex < 0 && gainIndex < 0)) return null;
+
+  const rawPoints = lines.slice(1).map((line) => {
+    const cells = line.split(',').map((cell) => cell.trim());
+    const angle = Number(cells[angleIndex]);
+    const value = Number(cells[lossIndex >= 0 ? lossIndex : gainIndex]);
+    if (!Number.isFinite(angle) || !Number.isFinite(value)) return null;
+    return { angle: ((angle % 360) + 360) % 360, value };
+  }).filter(Boolean);
+
+  if (rawPoints.length < 2) return null;
+  const maxGain = Math.max(...rawPoints.map((point) => point.value));
+  const points = rawPoints
+    .map((point) => ({
+      angle: point.angle,
+      lossDb: lossIndex >= 0 ? clamp(point.value, 0, 60) : clamp(maxGain - point.value, 0, 60),
+    }))
+    .sort((a, b) => a.angle - b.angle);
+
+  return { points };
+};
+
+const parseClutterGeoJson = (text) => {
+  const data = JSON.parse(text);
+  const rawFeatures = data.type === 'FeatureCollection'
+    ? data.features
+    : data.type === 'Feature'
+      ? [data]
+      : [{ type: 'Feature', properties: {}, geometry: data }];
+
+  const features = rawFeatures.map((feature) => {
+    const lossDb = Number(
+      feature.properties?.lossDb ??
+      feature.properties?.loss_db ??
+      feature.properties?.clutterLoss ??
+      feature.properties?.rf_loss_db ??
+      0,
+    );
+    return Number.isFinite(lossDb)
+      ? { ...feature, lossDb: clamp(lossDb, 0, 40) }
+      : null;
+  }).filter((feature) => feature && ['Polygon', 'MultiPolygon'].includes(feature.geometry?.type));
+
+  return features.length ? { features } : null;
+};
+
 const parseCsvMeasurements = (text) => {
   const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   if (lines.length < 2) return [];
@@ -869,6 +1114,14 @@ function App() {
   const [antennaAzimuth, setAntennaAzimuth] = useState(0);
   const [antennaBeamwidth, setAntennaBeamwidth] = useState(360);
   const [frontBackRatio, setFrontBackRatio] = useState(0);
+  const [antennaPattern, setAntennaPattern] = useState(null);
+  const [patternNotice, setPatternNotice] = useState('Optional: import antenna pattern CSV with angle/lossDb or angle/gain_dBi.');
+  const [clutterMap, setClutterMap] = useState(null);
+  const [clutterMapNotice, setClutterMapNotice] = useState('Optional: import GeoJSON polygons with lossDb properties.');
+  const [rainRate, setRainRate] = useState(DEFAULT_SHF_RAIN_RATE_MM_H);
+  const [atmosphericLoss, setAtmosphericLoss] = useState(DEFAULT_ATMOSPHERIC_LOSS_DB_PER_KM);
+  const [calibrationOffset, setCalibrationOffset] = useState(0);
+  const [calibrationEnabled, setCalibrationEnabled] = useState(false);
   const [measurements, setMeasurements] = useState([]);
   const [measurementNotice, setMeasurementNotice] = useState('Import CSV or GPX measurements for validation.');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -895,11 +1148,7 @@ function App() {
     thresholdDbm: calculateModeThreshold(modeProfile.thresholds[grade.key], receiverBandwidth, noiseFigure, requiredSnr),
   })), [modeProfile, noiseFigure, receiverBandwidth, requiredSnr]);
   const powerDbm = 10 * Math.log10(power * 1000);
-  const combinedAreas = useMemo(() => sites.reduce((total, site) => ({
-    strong: total.strong + site.areas.strong,
-    moderate: total.moderate + site.areas.moderate,
-    weak: total.weak + site.areas.weak,
-  }), { ...EMPTY_AREAS }), [sites]);
+  const combinedAreas = useMemo(() => calculateCombinedCoverageAreas(sites), [sites]);
 
   const analyzedSites = sites.filter((site) => site.coveragePolygons.weak).length;
   const systemLossDb = feedlineLoss + fadeMargin;
@@ -915,6 +1164,7 @@ function App() {
     35,
     95,
   );
+  const activeCalibrationOffset = calibrationEnabled ? calibrationOffset : 0;
   const validationReport = useMemo(() => {
     const comparisons = measurements.map((measurement) => {
       let bestMatch = null;
@@ -934,9 +1184,14 @@ function App() {
           rxAntennaGain,
           systemLossDb,
           clutterLossDb: clutterProfile.lossDb,
+          calibrationOffsetDb: activeCalibrationOffset,
+          antennaPattern,
           antennaAzimuth,
           antennaBeamwidth,
           frontBackRatio,
+          clutterMap,
+          rainRateMmH: rainRate,
+          atmosphericLossDbPerKm: atmosphericLoss,
           serviceGrades,
         });
 
@@ -991,6 +1246,12 @@ function App() {
         confidenceScore,
         reliability: modelReliability.label,
         reliabilityNotes: modelReliability.notes,
+        calibrationEnabled,
+        calibrationOffsetDb: activeCalibrationOffset,
+        antennaPatternPoints: antennaPattern?.points?.length ?? 0,
+        clutterMapFeatures: clutterMap?.features?.length ?? 0,
+        rainRateMmH: rainRate,
+        atmosphericLossDbPerKm: atmosphericLoss,
       },
       summary: summarizeErrors(comparisons),
       comparisons,
@@ -998,6 +1259,11 @@ function App() {
   }, [
     antennaAzimuth,
     antennaBeamwidth,
+    activeCalibrationOffset,
+    antennaPattern,
+    atmosphericLoss,
+    calibrationEnabled,
+    clutterMap,
     clutterKey,
     confidenceScore,
     fadeMargin,
@@ -1014,6 +1280,7 @@ function App() {
     noiseFigure,
     powerDbm,
     propagationModel,
+    rainRate,
     receiverBandwidth,
     requiredSnr,
     rxAntennaGain,
@@ -1119,6 +1386,59 @@ function App() {
     }
   }, []);
 
+  const importAntennaPattern = useCallback(async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const parsed = parseAntennaPatternCsv(await file.text());
+      if (!parsed) {
+        setPatternNotice('Pattern import failed. CSV needs angle plus lossDb or gain_dBi columns.');
+        return;
+      }
+
+      setAntennaPattern(parsed);
+      setPatternNotice(`Imported ${parsed.points.length} antenna pattern points from ${file.name}.`);
+    } catch (error) {
+      setPatternNotice(`Pattern import failed: ${error.message}`);
+    } finally {
+      event.target.value = '';
+    }
+  }, []);
+
+  const importClutterMap = useCallback(async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const parsed = parseClutterGeoJson(await file.text());
+      if (!parsed) {
+        setClutterMapNotice('Clutter import failed. GeoJSON polygons need numeric lossDb properties.');
+        return;
+      }
+
+      setClutterMap(parsed);
+      setClutterMapNotice(`Imported ${parsed.features.length} clutter polygon${parsed.features.length > 1 ? 's' : ''} from ${file.name}.`);
+    } catch (error) {
+      setClutterMapNotice(`Clutter import failed: ${error.message}`);
+    } finally {
+      event.target.value = '';
+    }
+  }, []);
+
+  const applyMeasurementCalibration = useCallback(() => {
+    const { count, meanError } = validationReport.summary;
+    if (count < 3) {
+      setMeasurementNotice('Need at least 3 matched measurements before applying calibration.');
+      return;
+    }
+
+    const nextOffset = clamp(meanError, -20, 20);
+    setCalibrationOffset(nextOffset);
+    setCalibrationEnabled(true);
+    setMeasurementNotice(`Applied local calibration offset ${nextOffset.toFixed(1)} dB from ${count} measurements.`);
+  }, [validationReport.summary]);
+
   const downloadValidationReport = useCallback(() => {
     const blob = new Blob([JSON.stringify(validationReport, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -1174,11 +1494,11 @@ function App() {
       haatSamples.push(calculateRadialHaat(siteElevation, hTx, radialSamples));
 
       const effectiveHTx = calculateEffectiveTxHeight(siteElevation, hTx, radialSamples);
-      const antennaPatternLoss = calculateAntennaPatternLoss(bearing, antennaAzimuth, antennaBeamwidth, frontBackRatio);
+      const antennaPatternLoss = getAntennaPatternLoss({ bearing, antennaAzimuth, antennaBeamwidth, frontBackRatio, antennaPattern });
       const directionalGain = gain - antennaPatternLoss;
 
       serviceGrades.forEach((grade) => {
-        const targetLoss = powerDbm + directionalGain + rxAntennaGain - systemLossDb - grade.thresholdDbm;
+        const targetLoss = powerDbm + directionalGain + rxAntennaGain - systemLossDb + activeCalibrationOffset - grade.thresholdDbm;
         const radius = findReliableDistance({
           modelKey: propagationModel,
           freq,
@@ -1190,21 +1510,33 @@ function App() {
           siteElevation,
           clutterLossDb: clutterProfile.lossDb,
           terrainPenaltyCache,
+          sitePosition: site.position,
+          bearing,
+          clutterMap,
+          rainRateMmH: rainRate,
+          atmosphericLossDbPerKm: atmosphericLoss,
         });
         newPolygons[grade.key].push(getDestinationPoint(site.position[0], site.position[1], bearing, radius));
 
         if (grade.key === 'weak') {
-          const pathLossAtRadius = calculateModelPathLoss({
+          const pathLossAtRadius = calculateTotalPathLoss({
             modelKey: propagationModel,
             freq,
             effectiveHTx,
+            hTx,
             hRx,
             distanceKm: radius,
             radialSamples,
             siteElevation,
+            clutterLossDb: clutterProfile.lossDb,
+            terrainPenaltyCache,
+            sitePosition: site.position,
+            bearing,
+            clutterMap,
+            rainRateMmH: rainRate,
+            atmosphericLossDbPerKm: atmosphericLoss,
           });
-          const terrainPenalty = calculateTerrainPenalty(radialSamples, radius, siteElevation, hTx, hRx, freq);
-          radialMargins.push(targetLoss - pathLossAtRadius - terrainPenalty - clutterProfile.lossDb);
+          radialMargins.push(targetLoss - pathLossAtRadius);
         }
       });
     }
@@ -1234,8 +1566,12 @@ function App() {
   }, [
     antennaAzimuth,
     antennaBeamwidth,
+    activeCalibrationOffset,
+    antennaPattern,
+    atmosphericLoss,
     clutterKey,
     clutterProfile.lossDb,
+    clutterMap,
     confidenceScore,
     freq,
     frontBackRatio,
@@ -1244,6 +1580,7 @@ function App() {
     hTx,
     powerDbm,
     propagationModel,
+    rainRate,
     rxAntennaGain,
     serviceGrades,
     systemLossDb,
@@ -1343,7 +1680,7 @@ function App() {
             </div>
             <div>
               <h1 style={{ fontSize: '1.2rem', fontWeight: '900', letterSpacing: '0.5px' }}>9M2PJU Coverage Prediction</h1>
-              <p style={{ fontSize: '0.75rem', fontWeight: '600' }}>Multi-Site Coverage Prediction v4.5.2</p>
+              <p style={{ fontSize: '0.75rem', fontWeight: '600' }}>Multi-Site Coverage Prediction v4.6.0</p>
             </div>
           </div>
         </div>
@@ -1356,7 +1693,7 @@ function App() {
               <img src="/brand_logo_v6.png" alt="Logo" style={{ width: '32px', height: '32px', objectFit: 'contain' }} />
               <div>
                 <h1 style={{ margin: 0, fontSize: '1.1rem', fontWeight: '900', color: 'var(--title-blue)', letterSpacing: '0.5px' }}>9M2PJU Coverage Prediction</h1>
-                  <p style={{ margin: 0, fontSize: '0.65rem', fontWeight: '600', color: 'var(--text-secondary)' }}>Multi-Site Coverage Prediction v4.5.2</p>
+                  <p style={{ margin: 0, fontSize: '0.65rem', fontWeight: '600', color: 'var(--text-secondary)' }}>Multi-Site Coverage Prediction v4.6.0</p>
               </div>
             </div>
           </div>
@@ -1533,6 +1870,11 @@ function App() {
             <div className="mode-note">
               {modelReliability.notes[0]}
             </div>
+            <label className="file-import-button">
+              <Upload size={14} /> Import clutter GeoJSON
+              <input type="file" accept=".json,.geojson,application/geo+json,application/json" onChange={importClutterMap} />
+            </label>
+            <div className="mode-note">{clutterMapNotice}</div>
           </div>
 
           <div className="control-group engineering-group">
@@ -1560,6 +1902,12 @@ function App() {
                   ))}
                 </select>
               </label>
+              <label>Rain rate
+                <input className="numeric-input compact-input" type="number" min="0" max="150" step="1" value={rainRate} onChange={(e) => setRainRate(clamp(toNumber(e.target.value), 0, 150))} />
+              </label>
+              <label>Atm loss/km
+                <input className="numeric-input compact-input" type="number" min="0" max="1" step="0.005" value={atmosphericLoss} onChange={(e) => setAtmosphericLoss(clamp(toNumber(e.target.value), 0, 1))} />
+              </label>
             </div>
             <div className="engineering-summary">
               Noise floor {thermalNoiseDbm(receiverBandwidth, noiseFigure).toFixed(1)} dBm · system loss {systemLossDb.toFixed(1)} dB
@@ -1579,6 +1927,11 @@ function App() {
                 <input className="numeric-input compact-input" type="number" min="0" max="40" step="1" value={frontBackRatio} onChange={(e) => setFrontBackRatio(clamp(toNumber(e.target.value), 0, 40))} />
               </label>
             </div>
+            <label className="file-import-button">
+              <Upload size={14} /> Import antenna pattern
+              <input type="file" accept=".csv,text/csv" onChange={importAntennaPattern} />
+            </label>
+            <div className="mode-note">{patternNotice}</div>
           </div>
 
           <div className="control-group">
@@ -1637,6 +1990,12 @@ function App() {
               <span>RMSE: {validationReport.summary.rmse.toFixed(1)} dB</span>
               <span>Within 10 dB: {validationReport.summary.within10Db.toFixed(0)}%</span>
             </div>
+            <div className="engineering-summary">
+              Calibration {calibrationEnabled ? `applied ${calibrationOffset.toFixed(1)} dB` : 'off'} · measured bias {validationReport.summary.meanError.toFixed(1)} dB
+            </div>
+            <button className="secondary-button" type="button" onClick={applyMeasurementCalibration} disabled={validationReport.summary.count < 3}>
+              <Activity size={14} /> Apply local calibration
+            </button>
             <button className="secondary-button" type="button" onClick={downloadValidationReport} disabled={!measurements.length}>
               <Download size={14} /> Download validation report
             </button>

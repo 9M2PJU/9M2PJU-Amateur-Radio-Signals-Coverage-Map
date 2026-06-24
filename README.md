@@ -9,10 +9,10 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Version-v4.5.2-0072ff?style=for-the-badge" alt="Version v4.5.2">
+  <img src="https://img.shields.io/badge/Version-v4.6.0-0072ff?style=for-the-badge" alt="Version v4.6.0">
   <img src="https://img.shields.io/badge/Latest_Stable_by-9M2PJU-4dbd74?style=for-the-badge" alt="Latest Stable by 9M2PJU">
   <img src="https://img.shields.io/badge/Live-coverage.hamradio.my-0072ff?style=for-the-badge&logo=react" alt="Live">
-  <img src="https://img.shields.io/badge/Engine-Hata_%2B_Terrain-blueviolet?style=for-the-badge" alt="Engine">
+  <img src="https://img.shields.io/badge/Engine-Hata_%2B_Terrain_%2B_Calibration-blueviolet?style=for-the-badge" alt="Engine">
   <img src="https://img.shields.io/badge/Mobile-Responsive-success?style=for-the-badge&logo=apple" alt="Mobile">
 </p>
 
@@ -30,17 +30,32 @@
 
 **9M2PJU Coverage Prediction** is a browser-based RF coverage planning tool for amateur radio operators. It predicts practical signal coverage from one or more transmitter sites by combining radio path loss, transmitter parameters, antenna height, receiver height, terrain elevation, and map-based visualization.
 
-[**Launch v4.5.2 Dashboard**](https://coverage.hamradio.my)
+[**Launch v4.6.0 Dashboard**](https://coverage.hamradio.my)
 
 The app is designed for fast field planning: choose a transmitter location, adjust RF parameters, run the prediction, and inspect the expected strong, moderate, and fringe coverage zones directly on a map.
 
-This app uses Hata-style path loss plus sampled terrain/Fresnel obstruction, so it should give useful approximate coverage zones, but real-world results can differ due to buildings, foliage, antenna pattern, local noise, receiver quality, weather, and terrain data accuracy.
+This app uses Hata/COST-style path loss, sampled terrain/Fresnel obstruction, optional clutter polygons, optional antenna pattern files, SHF rain/atmospheric attenuation, and local measurement calibration. It should give useful planning-grade coverage zones, but real-world results can still differ due to building-level obstructions, foliage detail, local noise, receiver quality, weather, terrain data accuracy, and antenna installation quality.
 
 ---
 
-## What Changed in v4.5.2
+## What Changed in v4.6.0
 
 - Labeled this release as **Latest Stable by 9M2PJU**.
+- Hardened RF prediction by preventing path loss from dropping below free-space loss.
+- Reworked VHF/UHF path-loss handling into Hata, COST-231-style high-UHF, and clearly marked extrapolated planning ranges.
+- Made radial coverage detection more conservative by using the first continuous failure point.
+- Added model reliability notes to the UI and validation report.
+- Added optional antenna pattern CSV import for real measured or manufacturer pattern loss/gain data.
+- Added optional GeoJSON clutter-loss polygons for local building, forest, or obstruction loss zones.
+- Added SHF rain-rate and atmospheric-loss controls for microwave planning.
+- Added local measurement calibration from imported signal reports.
+- Changed combined multi-site area totals to estimate overlap-aware union area instead of simple summed area.
+- Added automated RF smoke tests for formula guardrails.
+- Updated project metadata to version `4.6.0`.
+
+## What Changed in v4.5.2
+
+- Labeled the release as **Latest Stable by 9M2PJU**.
 - Hardened RF prediction by preventing path loss from dropping below free-space loss.
 - Reworked VHF/UHF path-loss handling into Hata, COST-231-style high-UHF, and clearly marked extrapolated planning ranges.
 - Made radial coverage detection more conservative by using the first continuous failure point.
@@ -75,7 +90,7 @@ The app can model multiple transmitter sites in the same planning session. Each 
 - Strong, moderate, and fringe coverage polygons.
 - Individual area totals.
 
-The dashboard also shows combined area totals across all sites. At the moment, these totals are summed per site, so overlapping coverage is counted more than once.
+The dashboard also shows combined area totals across all sites. Combined totals now use an overlap-aware grid union estimate, so overlapping coverage is counted once instead of being simply summed per site.
 
 ### Terrain-Aware Coverage
 
@@ -91,7 +106,10 @@ The model responds to:
 - TX power from 0.1 W to 100 W.
 - Antenna gain in dBi.
 - Directional antenna azimuth, beamwidth, and front-to-back ratio.
+- Optional antenna pattern CSV import using angle/lossDb or angle/gain_dBi columns.
 - Feedline loss, receiver antenna gain, receiver noise figure, required SNR, receiver bandwidth, and fade margin.
+- Optional GeoJSON clutter-loss polygons using properties such as `lossDb`, `loss_db`, `clutterLoss`, or `rf_loss_db`.
+- SHF rain rate and atmospheric loss controls for 3-30 GHz paths.
 - Receiver height above ground from 1 m to 30 m.
 - Mode-specific receiver bandwidth and required SNR defaults.
 - VHF, UHF, and SHF band selectors with exact frequency control from 30 MHz to 30 GHz.
@@ -108,6 +126,8 @@ lat,lon,rssi
 ```
 
 GPX imports read `trkpt` or `wpt` coordinates and look for signal values in extension fields named `rssi`, `signal`, `signal_dbm`, `dbm`, or `rx_dbm`. After import, the app shows validation markers on the map and can export a JSON validation report with model assumptions, prediction class, measured dBm, calculated predicted dBm at each measurement point, error, RMSE, median absolute error, and within-6/within-10 dB statistics.
+
+When at least 3 matched field measurements are available, the app can apply a local calibration offset from measured prediction bias. This does not change the physics model; it tunes the practical prediction for the current area, antenna installation, receiver chain, and local RF environment.
 
 ### Map Layers
 
@@ -134,10 +154,17 @@ graph TD
     Samples --> HAAT["Estimate HAAT and effective TX height"]
     HAAT --> PathLoss["Calculate Hata-style path loss"]
     Samples --> TerrainPenalty["Calculate Fresnel clearance and terrain penalty"]
+    Params --> Pattern["Apply optional antenna pattern file"]
+    Params --> Clutter["Apply optional clutter GeoJSON loss"]
+    Params --> Weather["Apply SHF rain and atmospheric loss"]
     PathLoss --> Radius["Find reliable distance per service grade"]
     TerrainPenalty --> Radius
+    Pattern --> Radius
+    Clutter --> Radius
+    Weather --> Radius
     Radius --> Polygons["Build coverage polygons"]
-    Polygons --> Map["Render Leaflet overlays"]
+    Polygons --> Union["Estimate overlap-aware combined area"]
+    Union --> Map["Render Leaflet overlays"]
     Map --> Metrics["Update area metrics"]
 ```
 
@@ -192,14 +219,16 @@ This creates shorter coverage in blocked directions and longer coverage in clear
 
 ### 4b. Engineering Adjustments
 
-The v4.5.2 engineering framework extends the link budget with:
+The v4.6.0 engineering framework extends the link budget with:
 
 ```text
 usable budget = TX dBm + TX antenna gain + RX antenna gain
                 - feedline loss - fade margin - receiver threshold
 ```
 
-Directional antennas reduce gain outside the selected beamwidth using a front-to-back-ratio approximation. Clutter profiles add practical environment loss and uncertainty. Receiver bandwidth, noise figure, and required SNR can raise the effective receiver threshold when the noise-limited threshold is higher than the mode preset.
+Directional antennas reduce gain outside the selected beamwidth using either the manual beamwidth/front-to-back approximation or an imported CSV pattern file. Clutter profiles add practical environment loss and uncertainty, and optional GeoJSON clutter polygons add local obstruction loss along the path. Receiver bandwidth, noise figure, and required SNR can raise the effective receiver threshold when the noise-limited threshold is higher than the mode preset.
+
+For SHF and microwave planning, the app can add rain-rate attenuation and atmospheric loss per kilometer. These controls are intentionally exposed because Malaysia-style heavy rain can matter on high-SHF paths, while VHF/UHF paths should not be penalized by microwave rain fading.
 
 The ITM-style hybrid profile is not a full Longley-Rice implementation. It combines free-space path loss, Hata-style loss, terrain roughness, radio-horizon loss, and existing Fresnel/diffraction penalties to behave more conservatively over rough or beyond-horizon paths. It is included as a browser-friendly engineering approximation until a full ITM/Longley-Rice engine or service is connected.
 
@@ -255,6 +284,9 @@ What is considered reliable enough for planning:
 - TX power is converted with `Ptx dBm = 10 log10(Pwatts * 1000)`.
 - Antenna gain is added directly to the link budget as dBi.
 - Coverage is found where `path loss + terrain penalty` stays below `Ptx dBm + antenna gain - receiver threshold`, using the first continuous radial failure point as the coverage edge.
+- Optional imported antenna pattern loss is applied per radial bearing.
+- Optional mapped clutter loss, SHF rain attenuation, atmospheric loss, feedline loss, receiver gain, fade margin, and local calibration are included in the same link-budget calculation path used for polygons and validation reports.
+- Combined multi-site coverage area is estimated with an overlap-aware grid union, so duplicate overlapped coverage is reduced.
 - Free-space path loss is the minimum allowed path loss for every band.
 - The Hata-style suburban path loss equation matches the common Okumura-Hata form and suburban correction in its strongest 150-1500 MHz planning range.
 - COST-231-style high-UHF handling is used around 1500-2000 MHz, while 2000-3000 MHz is treated as an extrapolated high-UHF planning range.
@@ -269,9 +301,13 @@ Known reliability limits:
 - The original Hata model is normally bounded around 150-1500 MHz, base antenna heights around 30-200 m, mobile heights around 1-10 m, and moderate link distances. The app warns when frequency or antenna heights move outside those ranges.
 - COST-231-style handling is strongest around 1500-2000 MHz. Predictions above 2000 MHz and below 150 MHz are planning extrapolations and should be calibrated with field measurements.
 - SHF support from 3-30 GHz is a practical line-of-sight planning approximation, not a full ITU-R P.452/P.530, Longley-Rice/ITM, rain-fade, or ray-tracing implementation.
+- SHF rain and atmospheric loss controls are planning approximations, not a full ITU-R P.838/P.530 availability model.
 - Terrain is sampled at fixed radial distances out to 120 km and interpolated at 0.5 km clearance intervals. Very small terrain features between sample points, especially buildings and near-street obstructions, can still be missed.
+- Imported clutter polygons are only as good as the supplied local GeoJSON and loss values. The app does not bundle building/foliage datasets.
+- Imported antenna pattern files are interpolated by bearing. They do not model tilt, polarization, mounting interaction, or mast/tower distortion.
+- Overlap-aware combined area is a grid estimate, not exact computational geometry.
 - The LoRa presets use typical sensitivity-style thresholds for SF7/SF9/SF12 at 125 kHz. Real LoRa reliability also depends on bandwidth, coding rate, payload length, interference, duty cycle, receiver implementation, and local regulations.
-- Feedline loss, receiver antenna gain, polarization mismatch, foliage, buildings, noise floor, interference, weather, and antenna radiation patterns are not fully modeled.
+- Polarization mismatch, receiver desense, local interference, indoor penetration, and street-level multipath are not fully modeled.
 
 For critical deployments, use this tool to choose candidate sites and then validate with field measurements or a regulatory-grade RF planning package.
 
@@ -281,9 +317,20 @@ For critical deployments, use this tool to choose candidate sites and then valid
 
 - This is a planning and prediction tool, not a certified engineering survey.
 - Open-Elevation API availability and CORS behavior can affect local development.
-- Buildings, foliage, antenna pattern nulls, feedline loss, polarization mismatch, and local noise floor are not fully modeled.
-- Combined multi-site totals currently sum each site's area and do not perform polygon union/deduplication.
+- Full Longley-Rice/ITM, ITU-R P.452/P.530, ray tracing, and bundled building/foliage datasets are not included yet.
 - Real-world validation with field measurements is still recommended.
+
+## Verification
+
+Run the project checks before release:
+
+```bash
+npm run test:rf
+npm run lint
+npm run build
+```
+
+`npm run test:rf` checks key RF guardrails, including free-space path-loss floors and SHF rain-loss behavior.
 
 ---
 

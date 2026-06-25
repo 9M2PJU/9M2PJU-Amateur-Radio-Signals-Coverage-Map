@@ -1,7 +1,7 @@
 {
   "name": "9m2pju-amateur-radio-signals-coverage-map",
   "private": true,
-  "version": "4.7.1",
+  "version": "4.8.0",
   "license": "AGPL-3.0-or-later",
   "type": "module",
   "scripts": {
@@ -9,6 +9,7 @@
     "build": "vite build",
     "lint": "eslint .",
     "test:rf": "node scripts/rf-smoke-test.mjs",
+    "test:experiment": "node scripts/experiment-smoke-test.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

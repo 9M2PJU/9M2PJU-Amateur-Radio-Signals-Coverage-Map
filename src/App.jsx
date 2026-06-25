@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { MapContainer, TileLayer, Marker, useMapEvents, Popup, Polygon, LayersControl, ZoomControl, CircleMarker } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, useMap, useMapEvents, Popup, Polygon, LayersControl, ZoomControl, CircleMarker } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import { Radio, Activity, Layers, Zap, Mountain, BarChart3, Plus, Trash2, Antenna, Info, X, Upload, Download, FileText } from 'lucide-react';
 import L from 'leaflet';
@@ -216,6 +216,9 @@ const toGeoJsonPolygonRing = (points) => {
 const PDF_LINES_PER_PAGE = 44;
 const PDF_MAX_LINE_CHARS = 90;
 const PDF_DOWNLOAD_REVOKE_DELAY_MS = 1000;
+const PDF_PAGE_WIDTH = 595;
+const PDF_PAGE_HEIGHT = 842;
+const PDF_MARGIN = 50;
 const sanitizePdfText = (value) => String(value ?? '')
   .replace(/\t/g, '  ')
   .replace(/[^\x20-\x7E]/g, '?');
@@ -266,7 +269,45 @@ const downloadBlob = (blob, filename) => {
   link.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), PDF_DOWNLOAD_REVOKE_DELAY_MS);
 };
-const createSimplePdf = (title, sections) => {
+const concatUint8Arrays = (arrays) => {
+  const totalLength = arrays.reduce((total, array) => total + array.length, 0);
+  const merged = new Uint8Array(totalLength);
+  let offset = 0;
+  arrays.forEach((array) => {
+    merged.set(array, offset);
+    offset += array.length;
+  });
+  return merged;
+};
+const dataUrlToBytes = (dataUrl) => {
+  const base64 = dataUrl.split(',')[1] ?? '';
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+};
+const encodePdfBody = (body, encoder) => {
+  if (body instanceof Uint8Array) return body;
+  if (Array.isArray(body)) {
+    return concatUint8Arrays(body.map((part) => encodePdfBody(part, encoder)));
+  }
+  return encoder.encode(String(body));
+};
+const buildPdfTextStream = (lines, x = PDF_MARGIN, y = 800, fontSize = 10, lineHeight = 14) => [
+  'BT',
+  `/F1 ${fontSize} Tf`,
+  `${x} ${y} Td`,
+  `${lineHeight} TL`,
+  ...lines.map((line, lineIndex) => (
+    lineIndex === 0
+      ? `(${escapePdfText(line)}) Tj`
+      : `T* (${escapePdfText(line)}) Tj`
+  )),
+  'ET',
+].join('\n');
+const createSimplePdf = (title, sections, options = {}) => {
   const rawLines = [
     title,
     `Generated: ${new Date().toISOString()}`,
@@ -291,49 +332,89 @@ const createSimplePdf = (title, sections) => {
     objects.push(body);
     return objects.length - 1;
   };
+  let mapImageNumber = null;
+  let mapImagePage = null;
+
+  if (options.mapImage?.bytes?.length && options.mapImage.width > 0 && options.mapImage.height > 0) {
+    const image = options.mapImage;
+    mapImageNumber = addObject([
+      `<< /Type /XObject /Subtype /Image /Width ${Math.round(image.width)} /Height ${Math.round(image.height)} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${image.bytes.length} >>\nstream\n`,
+      image.bytes,
+      '\nendstream',
+    ]);
+    const imageWidthPt = PDF_PAGE_WIDTH - (PDF_MARGIN * 2);
+    const imageHeightPt = Math.min(360, imageWidthPt * (image.height / image.width));
+    const imageX = PDF_MARGIN;
+    const imageY = 405;
+    const captionLines = [
+      `Map snapshot: ${options.mapImage.caption ?? 'Current coverage viewport'}`,
+      `Coverage source: ${options.mapImage.coverageSource ?? 'map overlay'}`,
+    ];
+    const stream = [
+      buildPdfTextStream([
+        title,
+        `Generated: ${new Date().toISOString()}`,
+      ], PDF_MARGIN, 800, 12, 16),
+      'q',
+      `${imageWidthPt.toFixed(2)} 0 0 ${imageHeightPt.toFixed(2)} ${imageX.toFixed(2)} ${imageY.toFixed(2)} cm`,
+      '/Im1 Do',
+      'Q',
+      buildPdfTextStream(captionLines, PDF_MARGIN, Math.max(72, imageY - 22), 9, 12),
+    ].join('\n');
+    const contentNumber = addObject(`<< /Length ${encoder.encode(stream).length} >>\nstream\n${stream}\nendstream`);
+    mapImagePage = { contentNumber, usesMapImage: true };
+  }
 
   pages.forEach((pageLines) => {
-    const stream = [
-      'BT',
-      '/F1 10 Tf',
-      '50 800 Td',
-      '14 TL',
-      ...pageLines.map((line, lineIndex) => (
-        lineIndex === 0
-          ? `(${escapePdfText(line)}) Tj`
-          : `T* (${escapePdfText(line)}) Tj`
-      )),
-      'ET',
-    ].join('\n');
+    const stream = buildPdfTextStream(pageLines);
     const contentNumber = addObject(`<< /Length ${encoder.encode(stream).length} >>\nstream\n${stream}\nendstream`);
     contentObjectNumbers.push(contentNumber);
     pageObjectNumbers.push(null);
   });
 
-  const pagesNumber = objects.length + pages.length;
+  const pageDescriptors = [
+    ...(mapImagePage ? [mapImagePage] : []),
+    ...contentObjectNumbers.map((contentNumber) => ({ contentNumber, usesMapImage: false })),
+  ];
+  const pagesNumber = objects.length + pageDescriptors.length;
   const fontNumber = pagesNumber + 1;
   const catalogNumber = fontNumber + 1;
 
-  contentObjectNumbers.forEach((contentNumber, index) => {
-    pageObjectNumbers[index] = addObject(`<< /Type /Page /Parent ${pagesNumber} 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 ${fontNumber} 0 R >> >> /Contents ${contentNumber} 0 R >>`);
+  pageDescriptors.forEach((pageDescriptor, index) => {
+    const xObjectResource = pageDescriptor.usesMapImage && mapImageNumber
+      ? ` /XObject << /Im1 ${mapImageNumber} 0 R >>`
+      : '';
+    pageObjectNumbers[index] = addObject(`<< /Type /Page /Parent ${pagesNumber} 0 R /MediaBox [0 0 ${PDF_PAGE_WIDTH} ${PDF_PAGE_HEIGHT}] /Resources << /Font << /F1 ${fontNumber} 0 R >>${xObjectResource} >> /Contents ${pageDescriptor.contentNumber} 0 R >>`);
   });
   addObject(`<< /Type /Pages /Kids [${pageObjectNumbers.map((number) => `${number} 0 R`).join(' ')}] /Count ${pageObjectNumbers.length} >>`);
   addObject('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>');
   addObject(`<< /Type /Catalog /Pages ${pagesNumber} 0 R >>`);
 
-  let pdf = '%PDF-1.4\n';
+  const pdf = '%PDF-1.4\n';
   const offsets = [0];
+  const chunks = [];
+  let byteLength = 0;
+  const pushBytes = (bytes) => {
+    chunks.push(bytes);
+    byteLength += bytes.length;
+  };
+  const pushString = (value) => pushBytes(encoder.encode(value));
+
+  pushString(pdf);
   objects.slice(1).forEach((body, index) => {
-    offsets.push(encoder.encode(pdf).length);
-    pdf += `${index + 1} 0 obj\n${body}\nendobj\n`;
+    offsets.push(byteLength);
+    pushString(`${index + 1} 0 obj\n`);
+    pushBytes(encodePdfBody(body, encoder));
+    pushString('\nendobj\n');
   });
-  const xrefOffset = encoder.encode(pdf).length;
-  pdf += `xref\n0 ${objects.length}\n0000000000 65535 f \n`;
+  const xrefOffset = byteLength;
+  let trailer = `xref\n0 ${objects.length}\n0000000000 65535 f \n`;
   offsets.slice(1).forEach((offset) => {
-    pdf += `${String(offset).padStart(10, '0')} 00000 n \n`;
+    trailer += `${String(offset).padStart(10, '0')} 00000 n \n`;
   });
-  pdf += `trailer\n<< /Size ${objects.length} /Root ${catalogNumber} 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
-  return encoder.encode(pdf);
+  trailer += `trailer\n<< /Size ${objects.length} /Root ${catalogNumber} 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
+  pushString(trailer);
+  return concatUint8Arrays(chunks);
 };
 const getTerrainProfileCacheKey = ([lat, lon], radialCount = RADIALS_COUNT) => [
   normalizeCoordinate(lat),
@@ -475,6 +556,206 @@ const createCoverageRasterCells = ({ sitePosition, polygons, maxRangeKm, cellKm 
   }
 
   return cells;
+};
+
+const hexToRgba = (hex, opacity = 1) => {
+  const value = String(hex ?? '#000000').replace('#', '');
+  const normalized = value.length === 3
+    ? value.split('').map((char) => `${char}${char}`).join('')
+    : value.padEnd(6, '0').slice(0, 6);
+  const numeric = Number.parseInt(normalized, 16);
+  const red = (numeric >> 16) & 255;
+  const green = (numeric >> 8) & 255;
+  const blue = numeric & 255;
+  return `rgba(${red}, ${green}, ${blue}, ${opacity})`;
+};
+
+const drawSnapshotPolygon = (ctx, points, { fillStyle, strokeStyle, lineWidth = 1, dashArray = [] }) => {
+  if (!points?.length) return;
+  ctx.beginPath();
+  points.forEach(([x, y], index) => {
+    if (index === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.closePath();
+  ctx.fillStyle = fillStyle;
+  ctx.fill();
+  ctx.strokeStyle = strokeStyle;
+  ctx.lineWidth = lineWidth;
+  ctx.setLineDash(dashArray);
+  ctx.stroke();
+  ctx.setLineDash([]);
+};
+
+const drawSnapshotBackground = (ctx, width, height, mapTilesAvailable) => {
+  const gradient = ctx.createLinearGradient(0, 0, width, height);
+  gradient.addColorStop(0, '#d8eef8');
+  gradient.addColorStop(1, '#e9efe1');
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, width, height);
+
+  ctx.strokeStyle = 'rgba(72, 104, 120, 0.16)';
+  ctx.lineWidth = 1;
+  for (let x = 0; x < width; x += 80) {
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, height);
+    ctx.stroke();
+  }
+  for (let y = 0; y < height; y += 80) {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(width, y);
+    ctx.stroke();
+  }
+
+  if (!mapTilesAvailable) {
+    ctx.fillStyle = 'rgba(39, 53, 61, 0.72)';
+    ctx.font = '18px Helvetica, Arial, sans-serif';
+    ctx.fillText('Map tiles unavailable for PDF snapshot', 24, 34);
+    ctx.font = '13px Helvetica, Arial, sans-serif';
+    ctx.fillText('Coverage overlay and site markers are still shown.', 24, 56);
+  }
+};
+
+const drawLeafletTiles = (ctx, map, scaleX, scaleY) => {
+  const container = map.getContainer();
+  const mapRect = container.getBoundingClientRect();
+  const tiles = Array.from(container.querySelectorAll('.leaflet-tile-loaded'));
+
+  tiles.forEach((tile) => {
+    if (!tile.complete || tile.naturalWidth === 0) return;
+    const rect = tile.getBoundingClientRect();
+    const sourceX = Math.max(0, mapRect.left - rect.left);
+    const sourceY = Math.max(0, mapRect.top - rect.top);
+    const sourceWidth = Math.min(rect.right, mapRect.right) - Math.max(rect.left, mapRect.left);
+    const sourceHeight = Math.min(rect.bottom, mapRect.bottom) - Math.max(rect.top, mapRect.top);
+    if (sourceWidth <= 0 || sourceHeight <= 0) return;
+
+    const destX = (Math.max(rect.left, mapRect.left) - mapRect.left) * scaleX;
+    const destY = (Math.max(rect.top, mapRect.top) - mapRect.top) * scaleY;
+    ctx.drawImage(
+      tile,
+      sourceX,
+      sourceY,
+      sourceWidth,
+      sourceHeight,
+      destX,
+      destY,
+      sourceWidth * scaleX,
+      sourceHeight * scaleY,
+    );
+  });
+};
+
+const drawCoverageSnapshot = ({ ctx, map, width, height, scaleX, scaleY, sites, serviceGrades, coverageRenderMode, activeSiteId }) => {
+  const toPoint = (position) => {
+    const point = map.latLngToContainerPoint(L.latLng(position[0], position[1]));
+    return [point.x * scaleX, point.y * scaleY];
+  };
+  const inView = ([x, y], buffer = 40) => x >= -buffer && x <= width + buffer && y >= -buffer && y <= height + buffer;
+
+  serviceGrades.forEach((grade) => {
+    sites.forEach((site) => {
+      if (coverageRenderMode === 'raster' && (site.coverageSource === 'per-cell-raster' || site.rasterCells?.length)) {
+        site.rasterCells
+          ?.filter((cell) => cell.gradeKey === grade.key)
+          .forEach((cell) => {
+            const points = cell.bounds.map(toPoint);
+            if (!points.some((point) => inView(point))) return;
+            drawSnapshotPolygon(ctx, points, {
+              fillStyle: hexToRgba(grade.color, Math.min(0.52, grade.fillOpacity + 0.18)),
+              strokeStyle: hexToRgba(grade.color, 0.18),
+              lineWidth: 0.5,
+            });
+          });
+        return;
+      }
+
+      const polygon = site.coveragePolygons?.[grade.key];
+      if (!polygon?.length) return;
+      const points = polygon.map(toPoint);
+      if (!points.some((point) => inView(point))) return;
+      drawSnapshotPolygon(ctx, points, {
+        fillStyle: hexToRgba(grade.color, grade.fillOpacity),
+        strokeStyle: grade.color,
+        lineWidth: site.id === activeSiteId ? 2.2 : 1.4,
+        dashArray: grade.dashArray ? [5, 4] : [],
+      });
+    });
+  });
+
+  sites.forEach((site) => {
+    const [x, y] = toPoint(site.position);
+    if (!inView([x, y], 24)) return;
+    ctx.beginPath();
+    ctx.arc(x, y, site.id === activeSiteId ? 10 : 8, 0, Math.PI * 2);
+    ctx.fillStyle = site.color;
+    ctx.fill();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = '#ffffff';
+    ctx.stroke();
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 11px Helvetica, Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(String(site.id), x, y);
+  });
+};
+
+const captureMapSnapshot = async ({ map, sites, serviceGrades, coverageRenderMode, activeSiteId }) => {
+  if (!map) return null;
+
+  const mapSize = map.getSize();
+  if (!mapSize?.x || !mapSize?.y) return null;
+
+  const scale = Math.min(1000 / mapSize.x, 560 / mapSize.y, 1.5);
+  const width = Math.max(320, Math.round(mapSize.x * scale));
+  const height = Math.max(220, Math.round(mapSize.y * scale));
+  const scaleX = width / mapSize.x;
+  const scaleY = height / mapSize.y;
+
+  const renderCanvas = (includeTiles) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    drawSnapshotBackground(ctx, width, height, includeTiles);
+    if (includeTiles) drawLeafletTiles(ctx, map, scaleX, scaleY);
+    drawCoverageSnapshot({ ctx, map, width, height, scaleX, scaleY, sites, serviceGrades, coverageRenderMode, activeSiteId });
+
+    ctx.fillStyle = 'rgba(20, 30, 36, 0.7)';
+    ctx.fillRect(12, height - 34, 260, 22);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '12px Helvetica, Arial, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('9M2PJU Coverage Prediction', 22, height - 23);
+    return canvas;
+  };
+
+  let canvas = renderCanvas(true);
+  try {
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.86);
+    return {
+      bytes: dataUrlToBytes(dataUrl),
+      width,
+      height,
+      caption: 'Current Leaflet map viewport with coverage overlay',
+      coverageSource: coverageRenderMode === 'raster' ? 'Raster cells' : 'Radial polygons',
+    };
+  } catch (error) {
+    console.warn('Map tile snapshot was blocked; exporting coverage overlay only.', error);
+    canvas = renderCanvas(false);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.86);
+    return {
+      bytes: dataUrlToBytes(dataUrl),
+      width,
+      height,
+      caption: 'Coverage overlay snapshot',
+      coverageSource: 'Map tiles blocked by browser CORS; overlay rendered without tile imagery',
+    };
+  }
 };
 
 const normalizeBearingDelta = (bearing, centerBearing) => {
@@ -1581,7 +1862,21 @@ function MapClickHandler({ onClick }) {
   return null;
 }
 
+function MapInstanceTracker({ mapRef }) {
+  const map = useMap();
+
+  useEffect(() => {
+    mapRef.current = map;
+    return () => {
+      if (mapRef.current === map) mapRef.current = null;
+    };
+  }, [map, mapRef]);
+
+  return null;
+}
+
 function App() {
+  const mapRef = useRef(null);
   const [sites, setSites] = useState(() => [
     createSite(1, [3.1390, 101.6869], SITE_COLORS[0]),
   ]);
@@ -1904,34 +2199,6 @@ function App() {
     )));
   }, [activeSiteId]);
 
-  const applyRadioMobilePreset = useCallback(() => {
-    setModeKey('fm');
-    setPropagationModel('ntiaItmApi');
-    setFreqBand('vhf');
-    setFreq(145);
-    setPower(5);
-    setHTx(10);
-    setHRx(10);
-    setGain(6);
-    setRxAntennaGain(2);
-    setTxLineLoss(3);
-    setRxLineLoss(0.5);
-    setRxThresholdUv(0.5);
-    setStrongSignalMarginDb(10);
-    setMaxRangeKm(100);
-    setItmReliabilityPercent(70);
-    setItmConfidencePercent(50);
-    setFadeMargin(0);
-    setCoverageRadialMode('radioMobile');
-    setCoverageRenderMode('raster');
-    setUseLandCover(false);
-    setUseTwoRay(false);
-    setAntennaAzimuth(0);
-    setAntennaBeamwidth(360);
-    setFrontBackRatio(0);
-    setAnalysisNotice('Radio Mobile comparison preset applied. Run coverage to refresh the map.');
-  }, []);
-
   const addCoverageSite = useCallback(() => {
     if (sites.length >= MAX_SITES || !activeSite) return;
 
@@ -2202,13 +2469,15 @@ function App() {
     useTwoRay,
   ]);
 
-  const exportCoveragePdf = useCallback(() => {
+  const exportCoveragePdf = useCallback(async () => {
     const analyzedCoverageSites = sites.filter((site) => site.coveragePolygons?.weak);
 
     if (!analyzedCoverageSites.length) {
       setAnalysisNotice('Run coverage first, then export the PDF report.');
       return;
     }
+
+    setAnalysisNotice('Preparing PDF report with map snapshot...');
 
     const formatArea = (value) => `${Number(value ?? 0).toLocaleString(undefined, { maximumFractionDigits: 1 })} km2`;
     const sections = [
@@ -2277,10 +2546,27 @@ function App() {
       },
     ];
 
-    const pdf = createSimplePdf('9M2PJU Coverage Prediction Result', sections);
+    let mapImage = null;
+    try {
+      mapImage = await captureMapSnapshot({
+        map: mapRef.current,
+        sites: analyzedCoverageSites,
+        serviceGrades,
+        coverageRenderMode,
+        activeSiteId,
+      });
+    } catch (error) {
+      console.warn('Map snapshot capture failed; exporting text-only PDF.', error);
+    }
+
+    const pdf = createSimplePdf('9M2PJU Coverage Prediction Result', sections, { mapImage });
     const blob = new Blob([pdf], { type: 'application/pdf' });
     downloadBlob(blob, `9m2pju-coverage-result-${new Date().toISOString().slice(0, 10)}.pdf`);
+    setAnalysisNotice(mapImage
+      ? 'PDF report exported with map snapshot.'
+      : 'PDF report exported without map snapshot.');
   }, [
+    activeSiteId,
     activeRadialCount,
     antennaAzimuth,
     antennaBeamwidth,
@@ -2825,9 +3111,6 @@ function App() {
               <div className={`analysis-notice ${analysisNotice.includes('could not') ? 'error' : analysisNotice.includes('fallback') ? 'warning' : ''}`}>
                 {analysisNotice}
               </div>
-              <button className="secondary-button export-result-button" type="button" onClick={applyRadioMobilePreset} disabled={isAnalyzing}>
-                <Radio size={14} /> Radio Mobile preset
-              </button>
               <button className="secondary-button export-result-button" type="button" onClick={exportCoverageResult} disabled={!analyzedSites}>
                 <Download size={14} /> Export GeoJSON
               </button>
@@ -2850,9 +3133,6 @@ function App() {
             </button>
             <button className="secondary-button export-result-button" type="button" onClick={exportCoveragePdf} disabled={!analyzedSites}>
               <FileText size={14} /> Export PDF
-            </button>
-            <button className="secondary-button export-result-button" type="button" onClick={applyRadioMobilePreset} disabled={isAnalyzing}>
-              <Radio size={14} /> Radio Mobile preset
             </button>
             <div className="mobile-metrics">
               <div className="mobile-metric-card">
@@ -3218,6 +3498,7 @@ function App() {
                 minZoom={MAP_MIN_ZOOM}
                 maxZoom={MAP_MAX_ZOOM}
                 maxNativeZoom={layer.maxZoom ?? MAP_MAX_ZOOM}
+                crossOrigin="anonymous"
                 keepBuffer={4}
                 updateWhenZooming={false}
                 updateWhenIdle
@@ -3228,6 +3509,7 @@ function App() {
           ))}
         </LayersControl>
         <ZoomControl position="topright" />
+        <MapInstanceTracker mapRef={mapRef} />
         <MapClickHandler onClick={updateActiveSitePosition} />
 
         {sites.map((site) => (
@@ -3365,8 +3647,6 @@ function App() {
               <dd>Confidence percentage sent to the ITM service. Keep 50% for Radio Mobile-style comparison unless you need a more conservative statistical case.</dd>
               <dt>Render mode</dt>
               <dd>Choose radial polygons for clean boundaries or raster cells for Radio Mobile-style visual comparison.</dd>
-              <dt>Radio Mobile preset</dt>
-              <dd>Applies matching comparison values such as 145 MHz, 5 W, 100 km range, 70% reliability, 50% confidence, 0.5 uV threshold, 180 radials, and raster rendering.</dd>
               <dt>Antenna pattern</dt>
               <dd>Azimuth points the antenna, beamwidth sets its main lobe width, and F/B ratio reduces back-side coverage.</dd>
               <dt>Frequency</dt>

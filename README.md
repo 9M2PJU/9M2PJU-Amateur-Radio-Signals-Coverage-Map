@@ -16,9 +16,9 @@
 
 ## Current Status
 
-**9M2PJU Coverage Prediction** is a browser-based RF planning app for amateur radio coverage studies. It supports multi-site terrain-aware predictions, Radio Mobile-style comparison settings, field-measurement validation, and result exports.
+**9M2PJU Coverage Prediction** is a browser-based RF planning app for amateur radio coverage studies. It is reliable and usable for amateur-radio planning, site comparison, and field-test preparation, while staying honest that it is not an RF engineering-grade or certified prediction tool.
 
-The app is useful for planning, comparison, and field preparation. It should not be treated as a certified RF engineering survey. Terrain quality, local clutter, receiver conditions, interference, and real-world installation details can move the result.
+The app supports multi-site terrain-aware predictions, Radio Mobile-style comparison settings, field-measurement validation, and result exports. Terrain quality, local clutter, receiver conditions, interference, and real-world installation details can still move the result, so important coverage decisions should be checked with field measurements.
 
 The default engineering model is the 9M2PJU **ITS Irregular Terrain Model (ITM) / Longley-Rice** service. If the ITM service cannot be reached, the app can continue with local terrain-aware fallback models.
 
@@ -44,7 +44,6 @@ The default engineering model is the 9M2PJU **ITS Irregular Terrain Model (ITM) 
 
 The app includes settings intended to make comparison with Radio Mobile by VE2DBE easier:
 
-- One-click Radio Mobile preset for the common 145 MHz, 5 W, 10 m / 10 m antenna-height, 6 dBi TX gain, 2 dBi RX gain, 3.5 dB total-line-loss, 0.5 uV threshold, 70% reliability, 50% confidence, and 100 km validation case.
 - Max range
 - Required ITM reliability
 - ITM confidence
@@ -108,7 +107,7 @@ Important safeguards and assumptions:
 
 ## Current Limits
 
-- This is a planning and validation aid, not a certified engineering survey.
+- This is a reliable planning and validation aid for amateur radio, not a certified RF engineering survey.
 - Terrain data availability and quality strongly affect the result.
 - Building-level blockage, foliage detail, indoor penetration, street-level multipath, receiver desense, local interference, and polarization mismatch are not fully modeled.
 - Imported clutter polygons and antenna patterns are only as accurate as the supplied data.

@@ -510,6 +510,38 @@ const createSite = (id, position, color) => ({
   areas: { ...EMPTY_AREAS },
 });
 
+const siteHasPredictionState = (site) => (
+  ['analyzing', 'analyzed', 'degraded', 'failed'].includes(site?.status) ||
+  Object.values(site?.coveragePolygons ?? {}).some((polygon) => polygon?.length >= 3) ||
+  (site?.rasterCells?.length ?? 0) > 0
+);
+
+const siteHasUsableCoverage = (site) => (
+  ['analyzed', 'degraded'].includes(site?.status) &&
+  (
+    Object.values(site?.coveragePolygons ?? {}).some((polygon) => polygon?.length >= 3) ||
+    (site?.rasterCells?.length ?? 0) > 0
+  )
+);
+
+const resetSitePrediction = (site, status = 'pending') => ({
+  ...site,
+  status,
+  confidence: null,
+  avgMarginDb: null,
+  coveragePolygons: { ...EMPTY_POLYGONS },
+  rasterCells: [],
+  coverageSource: 'radial-polygon',
+  rasterEngine: null,
+  rasterStats: null,
+  areas: { ...EMPTY_AREAS },
+  itmRadialLosses: null,
+  itmWarningSamples: 0,
+  itmErrorSamples: 0,
+  radioMobileRows: [],
+  failedChunks: 0,
+});
+
 const getDestinationPoint = (lat, lon, brng, dist) => {
   const R = 6371;
   const ad = dist / R;
@@ -895,6 +927,10 @@ const normalizeBearingDelta = (bearing, centerBearing) => {
   return delta;
 };
 
+const normalizeRelativeBearing = (bearing, centerBearing) => (
+  ((bearing - centerBearing + 360) % 360)
+);
+
 const calculateAntennaPatternLoss = (bearing, antennaAzimuth, antennaBeamwidth, frontBackRatio) => {
   if (antennaBeamwidth >= 360 || frontBackRatio <= 0) return 0;
   const halfBeamwidth = Math.max(1, antennaBeamwidth / 2);
@@ -926,7 +962,7 @@ const interpolateAntennaPatternLoss = (bearing, antennaPattern) => {
 };
 
 const getAntennaPatternLoss = ({ bearing, antennaAzimuth, antennaBeamwidth, frontBackRatio, antennaPattern }) => {
-  const patternLoss = interpolateAntennaPatternLoss(normalizeBearingDelta(bearing, antennaAzimuth), antennaPattern);
+  const patternLoss = interpolateAntennaPatternLoss(normalizeRelativeBearing(bearing, antennaAzimuth), antennaPattern);
   if (typeof patternLoss === 'number') return patternLoss;
   return calculateAntennaPatternLoss(bearing, antennaAzimuth, antennaBeamwidth, frontBackRatio);
 };
@@ -1513,6 +1549,7 @@ const fetchPerCellRasterCoverage = async ({
   antennaAzimuth,
   antennaBeamwidth,
   frontBackRatio,
+  antennaPattern,
   rainRateMmH,
   atmosphericLossDbPerKm,
   useTwoRay,
@@ -1552,11 +1589,12 @@ const fetchPerCellRasterCoverage = async ({
       groundPermittivity: 15,
       groundConductivity: 0.005,
       surfaceRefractivity: 301,
-      antenna: {
-        azimuth: antennaAzimuth,
-        beamwidth: antennaBeamwidth,
-        frontBackRatio,
-      },
+        antenna: {
+          azimuth: antennaAzimuth,
+          beamwidth: antennaBeamwidth,
+          frontBackRatio,
+          patternPoints: antennaPattern?.points ?? [],
+        },
       rainRateMmH,
       atmosphericLossDbPerKm,
       useTwoRay,
@@ -2137,11 +2175,14 @@ const createRadioMobileComparisonReport = (referenceRows, sites) => {
 };
 
 const getSiteTrustProfile = (site) => {
-  if (!site || !site.coveragePolygons?.weak) {
+  if (!site) {
+    return { level: 'Pending', tone: 'warning', detail: 'Run coverage to calculate engine and terrain status.' };
+  }
+  if (site.status === 'failed') return { level: 'Failed', tone: 'error', detail: 'Prediction failed for this site.' };
+  if (!siteHasUsableCoverage(site)) {
     return { level: 'Pending', tone: 'warning', detail: 'Run coverage to calculate engine and terrain status.' };
   }
   const stats = site.rasterStats ?? {};
-  if (site.status === 'failed') return { level: 'Failed', tone: 'error', detail: 'Prediction failed for this site.' };
   if ((site.itmErrorSamples ?? 0) > 0 || Number(stats.errorSamples ?? 0) > 0) {
     return { level: 'Flagged', tone: 'warning', detail: 'Native ITM returned error-code samples; inspect edges before relying on them.' };
   }
@@ -2160,6 +2201,7 @@ const getSiteTrustProfile = (site) => {
 const getSiteResultExplanation = (site) => {
   if (!site) return 'No active site selected.';
   const profile = getSiteTrustProfile(site);
+  if (!siteHasUsableCoverage(site)) return `${profile.level}: ${profile.detail}`;
   const source = site.coverageSource === 'per-cell-raster' ? 'per-cell raster' : 'radial polygon';
   const terrainNote = (site.failedChunks ?? 0) > 0
     ? `${site.failedChunks} elevation chunk fallback${site.failedChunks > 1 ? 's' : ''}`
@@ -2264,7 +2306,7 @@ function App() {
   const [antennaBeamwidth, setAntennaBeamwidth] = useState(360);
   const [frontBackRatio, setFrontBackRatio] = useState(0);
   const [antennaPattern, setAntennaPattern] = useState(null);
-  const [patternNotice, setPatternNotice] = useState('Optional: import antenna pattern CSV with angle/lossDb or angle/gain_dBi.');
+  const [patternNotice, setPatternNotice] = useState('Optional: import antenna pattern CSV with relative angle/lossDb or relative angle/gain_dBi.');
   const [clutterMap, setClutterMap] = useState(null);
   const [clutterMapNotice, setClutterMapNotice] = useState('Optional: import GeoJSON polygons with lossDb properties.');
   const [localDemNotice, setLocalDemNotice] = useState('Optional: import local DEM CSV/JSON with lat, lon, elevation.');
@@ -2288,6 +2330,7 @@ function App() {
   const [analysisNotice, setAnalysisNotice] = useState('Ready for coverage prediction.');
   const [itmApiStatus, setItmApiStatus] = useState({ state: 'unchecked', message: `ITS ITM service: ${ITM_API_URL}` });
   const isAnalyzingRef = useRef(false);
+  const predictionRevisionRef = useRef(0);
   const sitesRef = useRef(sites);
   const terrainProfileCacheRef = useRef(new Map());
 
@@ -2329,7 +2372,7 @@ function App() {
     [radioMobileReferenceRows, sites],
   );
 
-  const analyzedSites = sites.filter((site) => site.coveragePolygons.weak).length;
+  const analyzedSites = sites.filter(siteHasUsableCoverage).length;
   const systemLossDb = txLineLoss + rxLineLoss + fadeMargin;
   const modelReliability = useMemo(() => getModelReliability({
     freq,
@@ -2418,6 +2461,28 @@ function App() {
       marginDb,
     };
   }), [activeSite?.haat, fringeThresholdDbm, gain, hRx, hTx, maxRangeKm, powerDbm, rxAntennaGain, systemLossDb]);
+  const isStationPresetActive = useCallback((preset) => (
+    Math.abs(power - preset.power) < 0.001 &&
+    Math.abs(hTx - preset.hTx) < 0.001 &&
+    Math.abs(hRx - preset.hRx) < 0.001 &&
+    Math.abs(gain - preset.gain) < 0.001 &&
+    Math.abs(rxAntennaGain - preset.rxAntennaGain) < 0.001 &&
+    Math.abs(fadeMargin - preset.fadeMargin) < 0.001 &&
+    (!preset.modeKey || modeKey === preset.modeKey) &&
+    (!preset.freqBand || freqBand === preset.freqBand) &&
+    (!preset.freq || Math.abs(freq - preset.freq) < 0.001) &&
+    (typeof preset.useTwoRay !== 'boolean' || useTwoRay === preset.useTwoRay)
+  ), [fadeMargin, freq, freqBand, gain, hRx, hTx, modeKey, power, rxAntennaGain, useTwoRay]);
+  const isSampleScenarioActive = useCallback((scenario) => (
+    activeSite &&
+    Math.abs(activeSite.position[0] - scenario.position[0]) < 0.0001 &&
+    Math.abs(activeSite.position[1] - scenario.position[1]) < 0.0001 &&
+    Math.abs(freq - scenario.freq) < 0.001 &&
+    Math.abs(hTx - scenario.hTx) < 0.001 &&
+    Math.abs(hRx - scenario.hRx) < 0.001 &&
+    Math.abs(maxRangeKm - scenario.maxRangeKm) < 0.001 &&
+    clutterKey === scenario.clutterKey
+  ), [activeSite, clutterKey, freq, hRx, hTx, maxRangeKm]);
   const validationReport = useMemo(() => {
     const comparisons = measurements.map((measurement) => {
       let bestMatch = null;
@@ -2590,6 +2655,22 @@ function App() {
     sitesRef.current = sites;
   }, [sites]);
 
+  const markCoverageStale = useCallback((notice = 'Settings changed. Run coverage to recalculate.') => {
+    const hasPrediction = isAnalyzingRef.current || sitesRef.current.some(siteHasPredictionState);
+    if (!hasPrediction) return;
+
+    predictionRevisionRef.current += 1;
+    setSites((currentSites) => currentSites.map((site) => (
+      siteHasPredictionState(site) ? resetSitePrediction(site) : site
+    )));
+    setAnalysisNotice(notice);
+  }, []);
+
+  const updatePredictionSetting = useCallback((setter, value, notice) => {
+    setter(value);
+    markCoverageStale(notice);
+  }, [markCoverageStale]);
+
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const params = new URLSearchParams(window.location.search);
@@ -2751,18 +2832,19 @@ function App() {
     try {
       const parsed = parseAntennaPatternCsv(await file.text());
       if (!parsed) {
-        setPatternNotice('Pattern import failed. CSV needs angle plus lossDb or gain_dBi columns.');
+        setPatternNotice('Pattern import failed. CSV needs relative angle plus lossDb or gain_dBi columns.');
         return;
       }
 
-      setAntennaPattern(parsed);
-      setPatternNotice(`Imported ${parsed.points.length} antenna pattern points from ${file.name}.`);
-    } catch (error) {
-      setPatternNotice(`Pattern import failed: ${error.message}`);
-    } finally {
-      event.target.value = '';
-    }
-  }, []);
+        setAntennaPattern(parsed);
+        setPatternNotice(`Imported ${parsed.points.length} antenna pattern points from ${file.name}; angles are relative to antenna azimuth.`);
+        markCoverageStale('Antenna pattern changed. Run coverage to recalculate.');
+      } catch (error) {
+        setPatternNotice(`Pattern import failed: ${error.message}`);
+      } finally {
+        event.target.value = '';
+      }
+    }, [markCoverageStale]);
 
   const importClutterMap = useCallback(async (event) => {
     const file = event.target.files?.[0];
@@ -2775,14 +2857,15 @@ function App() {
         return;
       }
 
-      setClutterMap(parsed);
-      setClutterMapNotice(`Imported ${parsed.features.length} clutter polygon${parsed.features.length > 1 ? 's' : ''} from ${file.name}.`);
-    } catch (error) {
-      setClutterMapNotice(`Clutter import failed: ${error.message}`);
-    } finally {
-      event.target.value = '';
-    }
-  }, []);
+        setClutterMap(parsed);
+        setClutterMapNotice(`Imported ${parsed.features.length} clutter polygon${parsed.features.length > 1 ? 's' : ''} from ${file.name}.`);
+        markCoverageStale('Clutter map changed. Run coverage to recalculate.');
+      } catch (error) {
+        setClutterMapNotice(`Clutter import failed: ${error.message}`);
+      } finally {
+        event.target.value = '';
+      }
+    }, [markCoverageStale]);
 
   const importLocalDem = useCallback(async (event) => {
     const file = event.target.files?.[0];
@@ -2798,16 +2881,18 @@ function App() {
       rows.forEach((row) => {
         elevationCache.set(getElevationCacheKey([row.lat, row.lon]), row.elevation);
       });
-      persistElevationCache();
-      terrainProfileCacheRef.current.clear();
-      setLocalDemNotice(`Imported ${rows.length} DEM elevation point${rows.length > 1 ? 's' : ''} from ${file.name}.`);
-      setAnalysisNotice('Local DEM cache updated. Run coverage again to use it.');
-    } catch (error) {
-      setLocalDemNotice(`DEM import failed: ${error.message}`);
-    } finally {
-      event.target.value = '';
-    }
-  }, []);
+        persistElevationCache();
+        terrainProfileCacheRef.current.clear();
+        const notice = 'Local DEM cache updated. Run coverage again to use it.';
+        setLocalDemNotice(`Imported ${rows.length} DEM elevation point${rows.length > 1 ? 's' : ''} from ${file.name}.`);
+        markCoverageStale(notice);
+        setAnalysisNotice(notice);
+      } catch (error) {
+        setLocalDemNotice(`DEM import failed: ${error.message}`);
+      } finally {
+        event.target.value = '';
+      }
+    }, [markCoverageStale]);
 
   const importRadioMobileReference = useCallback(async (event) => {
     const file = event.target.files?.[0];
@@ -2958,22 +3043,23 @@ function App() {
     if (preset.freqBand) setFreqBand(preset.freqBand);
     if (preset.freq) setFreq(preset.freq);
     if (typeof preset.useTwoRay === 'boolean') setUseTwoRay(preset.useTwoRay);
-    setAnalysisNotice(`${preset.label} preset applied. Run coverage to recalculate.`);
-  }, []);
+    const notice = `${preset.label} preset applied. Run coverage to recalculate.`;
+    markCoverageStale(notice);
+    setAnalysisNotice(notice);
+  }, [markCoverageStale]);
 
   const applySampleScenario = useCallback((scenario) => {
     setSites((currentSites) => currentSites.map((site) => (
-      site.id === activeSiteId
-        ? {
-          ...site,
-          position: scenario.position,
-          status: 'pending',
-          coveragePolygons: { ...EMPTY_POLYGONS },
-          rasterCells: [],
-          areas: { ...EMPTY_AREAS },
-        }
-        : site
+      resetSitePrediction(
+        site.id === activeSiteId
+          ? {
+            ...site,
+            position: scenario.position,
+          }
+          : site,
+      )
     )));
+    predictionRevisionRef.current += 1;
     setFreq(scenario.freq);
     setFreqBand(scenario.freq < 300 ? 'vhf' : scenario.freq < 3000 ? 'uhf' : 'shf');
     setHTx(scenario.hTx);
@@ -3106,7 +3192,8 @@ function App() {
     setCalibrationOffset(nextOffset);
     setCalibrationEnabled(true);
     setMeasurementNotice(`Applied local calibration offset ${nextOffset.toFixed(1)} dB from ${count} measurements.`);
-  }, [validationReport.summary]);
+    markCoverageStale('Local calibration changed. Run coverage to recalculate.');
+  }, [markCoverageStale, validationReport.summary]);
 
   const downloadValidationReport = useCallback(() => {
     const blob = new Blob([JSON.stringify(validationReport, null, 2)], { type: 'application/json' });
@@ -3121,7 +3208,7 @@ function App() {
   }, [validationReport]);
 
   const exportCoverageResult = useCallback(() => {
-    const analyzedCoverageSites = sites.filter((site) => site.coveragePolygons?.weak);
+    const analyzedCoverageSites = sites.filter(siteHasUsableCoverage);
 
     if (!analyzedCoverageSites.length) {
       setAnalysisNotice('Run coverage first, then export the result.');
@@ -3195,8 +3282,52 @@ function App() {
       },
     }));
 
-    const coverageFeatures = analyzedCoverageSites.flatMap((site) => (
-      serviceGrades
+    const coverageFeatures = analyzedCoverageSites.flatMap((site) => {
+      if (site.coverageSource === 'per-cell-raster' && site.rasterCells?.length) {
+        const cellAreaKm2 = (site.rasterCellKm ?? rasterCellKm) ** 2;
+        return site.rasterCells.map((cell) => {
+          const grade = serviceGrades.find((item) => item.key === cell.gradeKey);
+          const ring = toGeoJsonPolygonRing(cell.bounds);
+          if (!grade || !ring) return null;
+
+          return {
+            type: 'Feature',
+            geometry: {
+              type: 'Polygon',
+              coordinates: [ring],
+            },
+            properties: {
+              featureType: 'coverage-cell',
+              siteId: site.id,
+              siteName: site.name,
+              cellId: cell.id,
+              grade: grade.key,
+              gradeLabel: grade.label,
+              thresholdDbm: Number(grade.thresholdDbm.toFixed(2)),
+              areaKm2: Number(cellAreaKm2.toFixed(3)),
+              centerLat: cell.center?.[0],
+              centerLon: cell.center?.[1],
+              distanceKm: cell.distanceKm,
+              bearingDeg: cell.bearingDeg,
+              rxDbm: cell.rxDbm,
+              pathLossDb: cell.lossDb,
+              itmLossDb: cell.itmLossDb,
+              color: grade.color,
+              fillOpacity: grade.fillOpacity,
+              model: site.model,
+              engine: cell.engine ?? site.rasterEngine,
+              nativeItm: cell.nativeItm,
+              coverageSource: site.coverageSource,
+              rasterEngine: site.rasterEngine,
+              rasterCellKm: site.rasterCellKm ?? rasterCellKm,
+              itmWarnings: cell.warnings ?? 0,
+              itmErrorCode: cell.errorCode ?? 0,
+            },
+          };
+        }).filter(Boolean);
+      }
+
+      return serviceGrades
         .map((grade) => {
           const ring = toGeoJsonPolygonRing(site.coveragePolygons[grade.key]);
           if (!ring) return null;
@@ -3228,8 +3359,8 @@ function App() {
             },
           };
         })
-        .filter(Boolean)
-    ));
+        .filter(Boolean);
+    });
 
     const geojson = {
       type: 'FeatureCollection',
@@ -3292,7 +3423,7 @@ function App() {
   ]);
 
   const exportCoveragePdf = useCallback(async () => {
-    const analyzedCoverageSites = sites.filter((site) => site.coveragePolygons?.weak);
+    const analyzedCoverageSites = sites.filter(siteHasUsableCoverage);
 
     if (!analyzedCoverageSites.length) {
       setAnalysisNotice('Run coverage first, then export the PDF report.');
@@ -3712,6 +3843,7 @@ function App() {
     let coverageSource = 'radial-polygon';
     let rasterStats = null;
     let rasterEngine = 'radial-derived';
+    let actualRasterCellKm = rasterCellKm;
     let rasterAreas = {
       strong: calculateAreaKm2(newPolygons.strong),
       moderate: calculateAreaKm2(newPolygons.moderate),
@@ -3734,22 +3866,24 @@ function App() {
           serviceGrades,
           confidence: itmConfidencePercent,
           reliability: itmReliabilityPercent,
-          antennaAzimuth,
-          antennaBeamwidth,
-          frontBackRatio,
-          rainRateMmH: rainRate,
-          atmosphericLossDbPerKm: atmosphericLoss,
-          useTwoRay,
+            antennaAzimuth,
+            antennaBeamwidth,
+            frontBackRatio,
+            antennaPattern,
+            rainRateMmH: rainRate,
+            atmosphericLossDbPerKm: atmosphericLoss,
+            useTwoRay,
           rasterCellKm,
         });
 
         if (rasterResult) {
-          rasterCells = rasterResult.cells ?? [];
-          coverageSource = 'per-cell-raster';
-          rasterEngine = rasterResult.engine ?? 'per-cell-raster';
-          rasterStats = rasterResult.stats ?? null;
-          rasterAreas = {
-            strong: Number(rasterResult.areas?.strong ?? 0),
+            rasterCells = rasterResult.cells ?? [];
+            coverageSource = 'per-cell-raster';
+            rasterEngine = rasterResult.engine ?? 'per-cell-raster';
+            rasterStats = rasterResult.stats ?? null;
+            actualRasterCellKm = Number(rasterResult.cellSizeKm ?? rasterCellKm);
+            rasterAreas = {
+              strong: Number(rasterResult.areas?.strong ?? 0),
             moderate: Number(rasterResult.areas?.moderate ?? 0),
             weak: Number(rasterResult.areas?.weak ?? 0),
           };
@@ -3781,8 +3915,9 @@ function App() {
       model: propagationModel,
       clutter: clutterKey,
       coverageRadialMode,
-      coverageRadials: radialCount,
-      itmRadialLosses: propagationModel === 'ntiaItmApi' ? itmRadialLosses : null,
+        coverageRadials: radialCount,
+        rasterCellKm: actualRasterCellKm,
+        itmRadialLosses: propagationModel === 'ntiaItmApi' ? itmRadialLosses : null,
       itmWarningSamples,
       itmErrorSamples,
       radioMobileRows,
@@ -3831,6 +3966,7 @@ function App() {
     if (isAnalyzingRef.current) return;
 
     const sitesToAnalyze = sitesRef.current;
+    const runRevision = predictionRevisionRef.current;
     if (!sitesToAnalyze.length) {
       setAnalysisNotice('Add at least one coverage site before running prediction.');
       return;
@@ -3839,7 +3975,7 @@ function App() {
     isAnalyzingRef.current = true;
     setIsAnalyzing(true);
     setAnalysisNotice(`Running terrain prediction for ${sitesToAnalyze.length} site${sitesToAnalyze.length > 1 ? 's' : ''}...`);
-    setSites((currentSites) => currentSites.map((site) => ({ ...site, status: 'analyzing' })));
+    setSites((currentSites) => currentSites.map((site) => resetSitePrediction(site, 'analyzing')));
 
     const analyzed = await Promise.all(sitesToAnalyze.map(async (site) => {
       try {
@@ -3847,12 +3983,19 @@ function App() {
         return result;
       } catch (e) {
         console.error(`Coverage analysis failed for ${site.name}`, e);
-        return { ...site, status: 'failed' };
+        return resetSitePrediction(site, 'failed');
       }
     }));
 
     const failedSites = analyzed.filter((site) => site.status === 'failed').length;
     const degradedSites = analyzed.filter((site) => site.status === 'degraded').length;
+
+    if (runRevision !== predictionRevisionRef.current) {
+      setAnalysisNotice('Settings changed during prediction. Run coverage again with the current values.');
+      setIsAnalyzing(false);
+      isAnalyzingRef.current = false;
+      return;
+    }
 
     setSites(analyzed);
 
@@ -4039,14 +4182,26 @@ function App() {
             )}
             <div className="compact-button-grid">
               {QUICK_STATION_PRESETS.map((preset) => (
-                <button key={preset.key} className="secondary-button compact-button" type="button" onClick={() => applyStationPreset(preset)}>
+                <button
+                  key={preset.key}
+                  className={`secondary-button compact-button ${isStationPresetActive(preset) ? 'active-preset' : ''}`}
+                  type="button"
+                  aria-pressed={isStationPresetActive(preset)}
+                  onClick={() => applyStationPreset(preset)}
+                >
                   {preset.label}
                 </button>
               ))}
             </div>
             <div className="compact-button-grid">
               {SAMPLE_SCENARIOS.map((scenario) => (
-                <button key={scenario.key} className="secondary-button compact-button" type="button" onClick={() => applySampleScenario(scenario)}>
+                <button
+                  key={scenario.key}
+                  className={`secondary-button compact-button ${isSampleScenarioActive(scenario) ? 'active-preset' : ''}`}
+                  type="button"
+                  aria-pressed={isSampleScenarioActive(scenario)}
+                  onClick={() => applySampleScenario(scenario)}
+                >
                   {scenario.label}
                 </button>
               ))}
@@ -4133,7 +4288,7 @@ function App() {
           <div className="control-group">
             <label><Activity size={12} style={{ marginRight: '6px' }} /> TX POWER: {formatPower(power)}W</label>
             <div className="slider-container">
-              <input type="range" min="0.1" max="100" step="0.1" value={power} onChange={(e) => setPower(Number(e.target.value))} />
+              <input type="range" min="0.1" max="100" step="0.1" value={power} onChange={(e) => updatePredictionSetting(setPower, Number(e.target.value))} />
               <input
                 className="numeric-input"
                 type="number"
@@ -4142,7 +4297,7 @@ function App() {
                 step="0.1"
                 value={power}
                 aria-label="TX power in watts"
-                onChange={(e) => setPower(clamp(Number(e.target.value), 0.1, 100))}
+                onChange={(e) => updatePredictionSetting(setPower, clamp(Number(e.target.value), 0.1, 100))}
               />
             </div>
           </div>
@@ -4150,7 +4305,7 @@ function App() {
           <div className="control-group">
             <label><Layers size={12} style={{ marginRight: '6px' }} /> TOWER HEIGHT: {hTx}m AGL</label>
             <div className="slider-container">
-              <input type="range" min="0" max="300" value={hTx} onChange={(e) => setHTx(Number(e.target.value))} />
+              <input type="range" min="0" max="300" value={hTx} onChange={(e) => updatePredictionSetting(setHTx, Number(e.target.value))} />
               <input
                 className="numeric-input"
                 type="number"
@@ -4159,7 +4314,7 @@ function App() {
                 step="1"
                 value={hTx}
                 aria-label="Tower height above ground in meters"
-                onChange={(e) => setHTx(clamp(Number(e.target.value), 0, 300))}
+                  onChange={(e) => updatePredictionSetting(setHTx, clamp(Number(e.target.value), 0, 300))}
               />
             </div>
           </div>
@@ -4167,7 +4322,7 @@ function App() {
           <div className="control-group">
             <label><Activity size={12} style={{ marginRight: '6px' }} /> ANTENNA GAIN: {gain}dBi</label>
             <div className="slider-container">
-              <input type="range" min="0" max="20" step="0.5" value={gain} onChange={(e) => setGain(Number(e.target.value))} />
+                <input type="range" min="0" max="20" step="0.5" value={gain} onChange={(e) => updatePredictionSetting(setGain, Number(e.target.value))} />
               <input
                 className="numeric-input"
                 type="number"
@@ -4176,7 +4331,7 @@ function App() {
                 step="0.5"
                 value={gain}
                 aria-label="TX antenna gain in dBi"
-                onChange={(e) => setGain(clamp(Number(e.target.value), 0, 20))}
+                  onChange={(e) => updatePredictionSetting(setGain, clamp(Number(e.target.value), 0, 20))}
               />
             </div>
           </div>
@@ -4184,7 +4339,7 @@ function App() {
           <div className="control-group">
             <label><Activity size={12} style={{ marginRight: '6px' }} /> RX HEIGHT: {hRx.toFixed(1)}m AGL</label>
             <div className="slider-container">
-              <input type="range" min="1" max="30" step="0.5" value={hRx} onChange={(e) => setHRx(Number(e.target.value))} />
+                <input type="range" min="1" max="30" step="0.5" value={hRx} onChange={(e) => updatePredictionSetting(setHRx, Number(e.target.value))} />
               <input
                 className="numeric-input"
                 type="number"
@@ -4193,7 +4348,7 @@ function App() {
                 step="0.5"
                 value={hRx}
                 aria-label="Receiver antenna height above ground in meters"
-                onChange={(e) => setHRx(clamp(Number(e.target.value), 1, 30))}
+                  onChange={(e) => updatePredictionSetting(setHRx, clamp(Number(e.target.value), 1, 30))}
               />
             </div>
           </div>
@@ -4208,10 +4363,11 @@ function App() {
                 const nextProfile = MODE_PROFILES[nextMode] ?? MODE_PROFILES.fm;
                 setModeKey(nextMode);
                 setFreq(nextProfile.defaultFreq);
-                setFreqBand(nextProfile.defaultFreq < 300 ? 'vhf' : nextProfile.defaultFreq < 3000 ? 'uhf' : 'shf');
-                setRequiredSnrDb(nextProfile.defaultRequiredSnr);
-                setRxThresholdUv(Number(dbmToMicrovolts(nextProfile.thresholds.weak).toFixed(3)));
-              }}
+                  setFreqBand(nextProfile.defaultFreq < 300 ? 'vhf' : nextProfile.defaultFreq < 3000 ? 'uhf' : 'shf');
+                  setRequiredSnrDb(nextProfile.defaultRequiredSnr);
+                  setRxThresholdUv(Number(dbmToMicrovolts(nextProfile.thresholds.weak).toFixed(3)));
+                  markCoverageStale('Mode profile changed. Run coverage to recalculate.');
+                }}
             >
               {MODE_OPTIONS.map((option) => (
                 <option key={option.key} value={option.key}>{option.label}</option>
@@ -4224,7 +4380,7 @@ function App() {
 
           <div className="control-group engineering-group">
             <label><FileText size={12} style={{ marginRight: '6px' }} /> ENGINEERING MODEL</label>
-            <select className="mode-select" value={propagationModel} onChange={(e) => setPropagationModel(e.target.value)}>
+              <select className="mode-select" value={propagationModel} onChange={(e) => updatePredictionSetting(setPropagationModel, e.target.value, 'Engineering model changed. Run coverage to recalculate.')}>
               {PROPAGATION_MODEL_OPTIONS.map((option) => (
                 <option key={option.key} value={option.key}>{option.label}</option>
               ))}
@@ -4236,12 +4392,12 @@ function App() {
               </div>
             )}
             <label className="toggle-field full-width-toggle">
-              <input type="checkbox" checked={useLandCover} onChange={(e) => setUseLandCover(e.target.checked)} />
+                <input type="checkbox" checked={useLandCover} onChange={(e) => updatePredictionSetting(setUseLandCover, e.target.checked, 'Land-cover setting changed. Run coverage to recalculate.')} />
               Apply land cover / clutter
             </label>
             {useLandCover && (
               <>
-                <select className="mode-select stacked-select" value={clutterKey} onChange={(e) => setClutterKey(e.target.value)}>
+                  <select className="mode-select stacked-select" value={clutterKey} onChange={(e) => updatePredictionSetting(setClutterKey, e.target.value, 'Clutter profile changed. Run coverage to recalculate.')}>
                   {CLUTTER_OPTIONS.map((option) => (
                     <option key={option.key} value={option.key}>{option.label} (+{option.lossDb} dB)</option>
                   ))}
@@ -4265,78 +4421,78 @@ function App() {
             <label><Activity size={12} style={{ marginRight: '6px' }} /> LINK BUDGET</label>
             <div className="engineering-grid">
               <label>TX line loss
-                <input className="numeric-input compact-input" type="number" min="0" max="20" step="0.1" value={txLineLoss} onChange={(e) => setTxLineLoss(clamp(toNumber(e.target.value), 0, 20))} />
+                  <input className="numeric-input compact-input" type="number" min="0" max="20" step="0.1" value={txLineLoss} onChange={(e) => updatePredictionSetting(setTxLineLoss, clamp(toNumber(e.target.value), 0, 20))} />
               </label>
               <label>RX line loss
-                <input className="numeric-input compact-input" type="number" min="0" max="20" step="0.1" value={rxLineLoss} onChange={(e) => setRxLineLoss(clamp(toNumber(e.target.value), 0, 20))} />
+                  <input className="numeric-input compact-input" type="number" min="0" max="20" step="0.1" value={rxLineLoss} onChange={(e) => updatePredictionSetting(setRxLineLoss, clamp(toNumber(e.target.value), 0, 20))} />
               </label>
               <label>RX gain
-                <input className="numeric-input compact-input" type="number" min="-20" max="30" step="0.5" value={rxAntennaGain} onChange={(e) => setRxAntennaGain(clamp(toNumber(e.target.value), -20, 30))} />
+                  <input className="numeric-input compact-input" type="number" min="-20" max="30" step="0.5" value={rxAntennaGain} onChange={(e) => updatePredictionSetting(setRxAntennaGain, clamp(toNumber(e.target.value), -20, 30))} />
               </label>
               <label>RX threshold uV
-                <input className="numeric-input compact-input" type="number" min="0.01" max="1000" step="0.01" value={rxThresholdUv} onChange={(e) => setRxThresholdUv(clamp(toNumber(e.target.value), 0.01, 1000))} />
+                  <input className="numeric-input compact-input" type="number" min="0.01" max="1000" step="0.01" value={rxThresholdUv} onChange={(e) => updatePredictionSetting(setRxThresholdUv, clamp(toNumber(e.target.value), 0.01, 1000))} />
               </label>
               <label>Threshold source
-                <select className="mini-select" value={thresholdMode} onChange={(e) => setThresholdMode(e.target.value)}>
+                  <select className="mini-select" value={thresholdMode} onChange={(e) => updatePredictionSetting(setThresholdMode, e.target.value)}>
                   {THRESHOLD_MODE_OPTIONS.map((option) => (
                     <option key={option.key} value={option.key}>{option.label}</option>
                   ))}
                 </select>
               </label>
               <label>Noise figure
-                <input className="numeric-input compact-input" type="number" min="0" max="30" step="0.5" value={noiseFigureDb} onChange={(e) => setNoiseFigureDb(clamp(toNumber(e.target.value), 0, 30))} />
+                  <input className="numeric-input compact-input" type="number" min="0" max="30" step="0.5" value={noiseFigureDb} onChange={(e) => updatePredictionSetting(setNoiseFigureDb, clamp(toNumber(e.target.value), 0, 30))} />
               </label>
               <label>Required SNR
-                <input className="numeric-input compact-input" type="number" min="-30" max="40" step="0.5" value={requiredSnrDb} onChange={(e) => setRequiredSnrDb(clamp(toNumber(e.target.value), -30, 40))} />
+                  <input className="numeric-input compact-input" type="number" min="-30" max="40" step="0.5" value={requiredSnrDb} onChange={(e) => updatePredictionSetting(setRequiredSnrDb, clamp(toNumber(e.target.value), -30, 40))} />
               </label>
               <label>Strong margin
-                <input className="numeric-input compact-input" type="number" min="0" max="60" step="1" value={strongSignalMarginDb} onChange={(e) => setStrongSignalMarginDb(clamp(toNumber(e.target.value), 0, 60))} />
+                  <input className="numeric-input compact-input" type="number" min="0" max="60" step="1" value={strongSignalMarginDb} onChange={(e) => updatePredictionSetting(setStrongSignalMarginDb, clamp(toNumber(e.target.value), 0, 60))} />
               </label>
               <label>Max range km
-                <input className="numeric-input compact-input" type="number" min={MIN_PREDICTION_RANGE_KM} max={MAX_PREDICTION_RANGE_KM} step="1" value={maxRangeKm} onChange={(e) => setMaxRangeKm(clamp(toNumber(e.target.value), MIN_PREDICTION_RANGE_KM, MAX_PREDICTION_RANGE_KM))} />
+                  <input className="numeric-input compact-input" type="number" min={MIN_PREDICTION_RANGE_KM} max={MAX_PREDICTION_RANGE_KM} step="1" value={maxRangeKm} onChange={(e) => updatePredictionSetting(setMaxRangeKm, clamp(toNumber(e.target.value), MIN_PREDICTION_RANGE_KM, MAX_PREDICTION_RANGE_KM))} />
               </label>
               <label>ITM reliability %
-                <input className="numeric-input compact-input" type="number" min="1" max="99" step="1" value={itmReliabilityPercent} onChange={(e) => setItmReliabilityPercent(clamp(toNumber(e.target.value), 1, 99))} />
+                  <input className="numeric-input compact-input" type="number" min="1" max="99" step="1" value={itmReliabilityPercent} onChange={(e) => updatePredictionSetting(setItmReliabilityPercent, clamp(toNumber(e.target.value), 1, 99), 'ITM reliability changed. Run coverage to recalculate.')} />
               </label>
               <label>ITM confidence %
-                <input className="numeric-input compact-input" type="number" min="1" max="99" step="1" value={itmConfidencePercent} onChange={(e) => setItmConfidencePercent(clamp(toNumber(e.target.value), 1, 99))} />
+                  <input className="numeric-input compact-input" type="number" min="1" max="99" step="1" value={itmConfidencePercent} onChange={(e) => updatePredictionSetting(setItmConfidencePercent, clamp(toNumber(e.target.value), 1, 99), 'ITM confidence changed. Run coverage to recalculate.')} />
               </label>
               <label>Validation mode
-                <select className="mini-select" value={coverageRadialMode} onChange={(e) => setCoverageRadialMode(e.target.value)}>
+                  <select className="mini-select" value={coverageRadialMode} onChange={(e) => updatePredictionSetting(setCoverageRadialMode, e.target.value, 'Validation mode changed. Run coverage to recalculate.')}>
                   {COVERAGE_RADIAL_OPTIONS.map((option) => (
                     <option key={option.key} value={option.key}>{option.label}</option>
                   ))}
                 </select>
               </label>
               <label>Render mode
-                <select className="mini-select" value={coverageRenderMode} onChange={(e) => setCoverageRenderMode(e.target.value)}>
+                  <select className="mini-select" value={coverageRenderMode} onChange={(e) => updatePredictionSetting(setCoverageRenderMode, e.target.value, 'Render mode changed. Run coverage to recalculate.')}>
                   {COVERAGE_RENDER_OPTIONS.map((option) => (
                     <option key={option.key} value={option.key}>{option.label}</option>
                   ))}
                 </select>
               </label>
               <label>Raster cell km
-                <select className="mini-select" value={rasterCellKm} onChange={(e) => setRasterCellKm(Number(e.target.value))}>
+                  <select className="mini-select" value={rasterCellKm} onChange={(e) => updatePredictionSetting(setRasterCellKm, Number(e.target.value), 'Raster cell size changed. Run coverage to recalculate.')}>
                   {RASTER_CELL_OPTIONS_KM.map((option) => (
                     <option key={option} value={option}>{option} km</option>
                   ))}
                 </select>
               </label>
               <label>Fade margin
-                <input className="numeric-input compact-input" type="number" min="0" max="40" step="1" value={fadeMargin} onChange={(e) => setFadeMargin(clamp(toNumber(e.target.value), 0, 40))} />
+                  <input className="numeric-input compact-input" type="number" min="0" max="40" step="1" value={fadeMargin} onChange={(e) => updatePredictionSetting(setFadeMargin, clamp(toNumber(e.target.value), 0, 40))} />
               </label>
               {freqBand === 'shf' && (
                 <>
                   <label>Rain rate
-                    <input className="numeric-input compact-input" type="number" min="0" max="150" step="1" value={rainRate} onChange={(e) => setRainRate(clamp(toNumber(e.target.value), 0, 150))} />
+                      <input className="numeric-input compact-input" type="number" min="0" max="150" step="1" value={rainRate} onChange={(e) => updatePredictionSetting(setRainRate, clamp(toNumber(e.target.value), 0, 150))} />
                   </label>
                   <label>Atm loss/km
-                    <input className="numeric-input compact-input" type="number" min="0" max="1" step="0.005" value={atmosphericLoss} onChange={(e) => setAtmosphericLoss(clamp(toNumber(e.target.value), 0, 1))} />
+                      <input className="numeric-input compact-input" type="number" min="0" max="1" step="0.005" value={atmosphericLoss} onChange={(e) => updatePredictionSetting(setAtmosphericLoss, clamp(toNumber(e.target.value), 0, 1))} />
                   </label>
                 </>
               )}
               <label className="toggle-field">
-                <input type="checkbox" checked={useTwoRay} onChange={(e) => setUseTwoRay(e.target.checked)} />
+                  <input type="checkbox" checked={useTwoRay} onChange={(e) => updatePredictionSetting(setUseTwoRay, e.target.checked, 'Two-ray setting changed. Run coverage to recalculate.')} />
                 Use two rays
               </label>
             </div>
@@ -4349,13 +4505,13 @@ function App() {
             <label><Antenna size={12} style={{ marginRight: '6px' }} /> ANTENNA PATTERN</label>
             <div className="engineering-grid">
               <label>Azimuth
-                <input className="numeric-input compact-input" type="number" min="0" max="359" step="1" value={antennaAzimuth} onChange={(e) => setAntennaAzimuth(clamp(toNumber(e.target.value), 0, 359))} />
+                  <input className="numeric-input compact-input" type="number" min="0" max="359" step="1" value={antennaAzimuth} onChange={(e) => updatePredictionSetting(setAntennaAzimuth, clamp(toNumber(e.target.value), 0, 359), 'Antenna azimuth changed. Run coverage to recalculate.')} />
               </label>
               <label>Beamwidth
-                <input className="numeric-input compact-input" type="number" min="5" max="360" step="5" value={antennaBeamwidth} onChange={(e) => setAntennaBeamwidth(clamp(toNumber(e.target.value), 5, 360))} />
+                  <input className="numeric-input compact-input" type="number" min="5" max="360" step="5" value={antennaBeamwidth} onChange={(e) => updatePredictionSetting(setAntennaBeamwidth, clamp(toNumber(e.target.value), 5, 360), 'Antenna beamwidth changed. Run coverage to recalculate.')} />
               </label>
               <label>F/B ratio
-                <input className="numeric-input compact-input" type="number" min="0" max="40" step="1" value={frontBackRatio} onChange={(e) => setFrontBackRatio(clamp(toNumber(e.target.value), 0, 40))} />
+                  <input className="numeric-input compact-input" type="number" min="0" max="40" step="1" value={frontBackRatio} onChange={(e) => updatePredictionSetting(setFrontBackRatio, clamp(toNumber(e.target.value), 0, 40), 'Antenna F/B ratio changed. Run coverage to recalculate.')} />
               </label>
             </div>
             <label className="file-import-button">
@@ -4372,11 +4528,12 @@ function App() {
                 <button
                   key={band.key}
                   type="button"
-                  className={`band-button ${freqBand === band.key ? 'active' : ''}`}
-                  onClick={() => {
-                    setFreqBand(band.key);
-                    setFreq(band.defaultFreq);
-                  }}
+                    className={`band-button ${freqBand === band.key ? 'active' : ''}`}
+                    onClick={() => {
+                      setFreqBand(band.key);
+                      setFreq(band.defaultFreq);
+                      markCoverageStale('Band changed. Run coverage to recalculate.');
+                    }}
                 >
                   <span>{band.label}</span>
                   <small>{band.rangeLabel}</small>
@@ -4387,10 +4544,10 @@ function App() {
             <input
               type="range"
               min={activeBand.min}
-              max={activeBand.max}
-              value={freq}
-              onChange={(e) => setFreq(Number(e.target.value))}
-            />
+                max={activeBand.max}
+                value={freq}
+                onChange={(e) => updatePredictionSetting(setFreq, Number(e.target.value), 'Frequency changed. Run coverage to recalculate.')}
+              />
           </div>
 
           <div className="control-group" style={{ marginTop: '25px', borderTop: '1px solid var(--glass-border)', paddingTop: '15px' }}>
@@ -4513,7 +4670,7 @@ function App() {
                   />
                 );
               })
-              : serviceGrades.map((grade) => site.coveragePolygons[grade.key] && (
+                : serviceGrades.map((grade) => site.coveragePolygons[grade.key]?.length >= 3 && (
                 <Polygon
                   key={`${site.id}-${grade.key}`}
                   positions={site.coveragePolygons[grade.key]}

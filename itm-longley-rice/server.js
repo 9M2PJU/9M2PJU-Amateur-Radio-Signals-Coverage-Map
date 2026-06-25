@@ -68,7 +68,48 @@ const getDestinationPoint = (lat, lon, bearingDeg, distanceKm) => {
 const normalizeBearingDelta = (bearing, centerBearing) => (
   Math.abs(((bearing - centerBearing + 540) % 360) - 180)
 );
-const getAntennaPatternLoss = ({ bearing, antennaAzimuth, antennaBeamwidth, frontBackRatio }) => {
+const normalizeRelativeBearing = (bearing, centerBearing) => (
+  ((bearing - centerBearing + 360) % 360)
+);
+const interpolateAntennaPatternLoss = (bearing, patternPoints) => {
+  if (!patternPoints?.length) return null;
+  const normalizedBearing = ((bearing % 360) + 360) % 360;
+  const points = patternPoints;
+  const extendedPoints = [...points, { ...points[0], angle: points[0].angle + 360 }];
+
+  for (let index = 1; index < extendedPoints.length; index += 1) {
+    const previous = extendedPoints[index - 1];
+    const next = extendedPoints[index];
+    const targetBearing = normalizedBearing < points[0].angle ? normalizedBearing + 360 : normalizedBearing;
+    if (targetBearing > next.angle) continue;
+
+    const ratio = (targetBearing - previous.angle) / Math.max(1e-9, next.angle - previous.angle);
+    return previous.lossDb + (next.lossDb - previous.lossDb) * clamp(ratio, 0, 1);
+  }
+
+  return points[points.length - 1].lossDb;
+};
+const normalizePatternPoints = (patternPoints) => (
+  Array.isArray(patternPoints)
+    ? patternPoints
+      .slice(0, 720)
+      .map((point) => {
+        const angle = Number(point.angle);
+        const lossDb = Number(point.lossDb);
+        if (!Number.isFinite(angle) || !Number.isFinite(lossDb)) return null;
+        return {
+          angle: ((angle % 360) + 360) % 360,
+          lossDb: clamp(lossDb, 0, 60),
+        };
+      })
+      .filter(Boolean)
+      .filter((point) => Number.isFinite(point.angle) && Number.isFinite(point.lossDb))
+      .sort((a, b) => a.angle - b.angle)
+    : []
+);
+const getAntennaPatternLoss = ({ bearing, antennaAzimuth, antennaBeamwidth, frontBackRatio, patternPoints }) => {
+  const patternLoss = interpolateAntennaPatternLoss(normalizeRelativeBearing(bearing, antennaAzimuth), patternPoints);
+  if (typeof patternLoss === 'number') return patternLoss;
   const normalizedBeamwidth = clamp(antennaBeamwidth, 1, 360);
   if (normalizedBeamwidth >= 360) return 0;
 
@@ -80,10 +121,11 @@ const getAntennaPatternLoss = ({ bearing, antennaAzimuth, antennaBeamwidth, fron
   return clamp(backWeight * frontBackRatio, 0, frontBackRatio);
 };
 const calculateTwoRayLoss = ({ frequencyMhz, distanceKm, txHeightM, rxHeightM }) => {
-  const distanceM = Math.max(1, distanceKm * 1000);
-  const breakpointM = (4 * Math.PI * Math.max(0.5, txHeightM) * Math.max(0.5, rxHeightM)) / (300 / frequencyMhz);
-  if (distanceM <= breakpointM) return 0;
-  return clamp(20 * Math.log10(distanceM / breakpointM), 0, 24);
+  if (distanceKm <= 0) return 0;
+  const wavelengthM = 300 / clamp(frequencyMhz, 20, ITM_MAX_FREQ_MHZ);
+  const breakpointKm = Math.max(0.1, (4 * Math.max(0.5, txHeightM) * Math.max(0.5, rxHeightM)) / wavelengthM / 1000);
+  if (distanceKm <= breakpointKm) return 0;
+  return clamp(6 * Math.log10(distanceKm / breakpointKm), 0, 18);
 };
 const calculateAtmosphericLoss = (frequencyMhz, distanceKm, lossDbPerKm) => (
   frequencyMhz >= 3000 ? clamp(lossDbPerKm, 0, 1) * distanceKm : 0
@@ -294,11 +336,12 @@ const normalizeRasterRequest = (payload) => {
       moderate: toNumber(thresholds.moderate, -105),
       weak: toNumber(thresholds.weak, -115),
     },
-    antenna: {
-      azimuth: clamp(toNumber(antenna.azimuth, 0), 0, 359),
-      beamwidth: clamp(toNumber(antenna.beamwidth, 360), 1, 360),
-      frontBackRatio: clamp(toNumber(antenna.frontBackRatio, 0), 0, 60),
-    },
+      antenna: {
+        azimuth: clamp(toNumber(antenna.azimuth, 0), 0, 359),
+        beamwidth: clamp(toNumber(antenna.beamwidth, 360), 1, 360),
+        frontBackRatio: clamp(toNumber(antenna.frontBackRatio, 0), 0, 60),
+        patternPoints: normalizePatternPoints(antenna.patternPoints),
+      },
   };
 };
 
@@ -462,10 +505,11 @@ const calculateRasterCell = async ({ cell, input, siteElevationM }) => {
   const itmLossDb = toNumber(loss?.lossDb, calculateFallbackItmStyleLoss({ ...itmInput, distanceKm: cell.distanceKm }));
   const antennaLossDb = getAntennaPatternLoss({
     bearing: cell.bearingDeg,
-    antennaAzimuth: input.antenna.azimuth,
-    antennaBeamwidth: input.antenna.beamwidth,
-    frontBackRatio: input.antenna.frontBackRatio,
-  });
+      antennaAzimuth: input.antenna.azimuth,
+      antennaBeamwidth: input.antenna.beamwidth,
+      frontBackRatio: input.antenna.frontBackRatio,
+      patternPoints: input.antenna.patternPoints,
+    });
   const externalLossDb = input.clutterLossDb +
     calculateShfRainLoss(input.frequencyMhz, cell.distanceKm, input.rainRateMmH) +
     calculateAtmosphericLoss(input.frequencyMhz, cell.distanceKm, input.atmosphericLossDbPerKm) +

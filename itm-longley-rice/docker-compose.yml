@@ -8,4 +8,9 @@ services:
     environment:
       PORT: 8787
       CORS_ORIGIN: "*"
+      OPEN_ELEVATION_API_URL: ${OPEN_ELEVATION_API_URL:-https://elevation.hamradio.my/api/v1/lookup}
+      RASTER_MAX_CELLS: ${RASTER_MAX_CELLS:-5000}
+      RASTER_MAX_PROFILE_SAMPLES: ${RASTER_MAX_PROFILE_SAMPLES:-96}
+      RASTER_PROFILE_STEP_KM: ${RASTER_PROFILE_STEP_KM:-2}
+      RASTER_WORKERS: ${RASTER_WORKERS:-2}
     restart: unless-stopped

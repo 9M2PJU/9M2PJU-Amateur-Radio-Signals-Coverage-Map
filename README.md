@@ -29,8 +29,9 @@ The default engineering model is the 9M2PJU **ITS Irregular Terrain Model (ITM) 
 - Overlap-aware combined area estimates.
 - VHF, UHF, and SHF frequency ranges from 30 MHz to 30 GHz.
 - Terrain sampling with elevation, HAAT, effective antenna height, curvature/refraction, Fresnel clearance, and diffraction-style penalties.
+- DEM/elevation-backed per-cell raster ITM when the helper service supports the raster endpoint.
 - Mode presets for FM voice, APRS/packet, SSB/weak signal, and LoRa SF7/SF9/SF12.
-- Link-budget controls for TX power, antenna heights, TX/RX gain, TX/RX line loss, RX threshold, fade margin, max range, and ITM reliability.
+- Link-budget controls for TX power, antenna heights, TX/RX gain, TX/RX line loss, RX threshold, fade margin, max range, ITM reliability/confidence, radial density, and render mode.
 - Optional land-cover/clutter loss profiles and imported clutter GeoJSON.
 - Optional two-ray loss adjustment.
 - Directional antenna controls and optional antenna-pattern CSV import.
@@ -43,8 +44,10 @@ The default engineering model is the 9M2PJU **ITS Irregular Terrain Model (ITM) 
 
 The app includes settings intended to make comparison with Radio Mobile by VE2DBE easier:
 
+- One-click Radio Mobile preset for the common 145 MHz, 5 W, 10 m / 10 m antenna-height, 6 dBi TX gain, 2 dBi RX gain, 3.5 dB total-line-loss, 0.5 uV threshold, 70% reliability, 50% confidence, and 100 km validation case.
 - Max range
 - Required ITM reliability
+- ITM confidence
 - RX threshold in microvolts and dBm
 - RX antenna gain
 - TX and RX line loss
@@ -53,8 +56,9 @@ The app includes settings intended to make comparison with Radio Mobile by VE2DB
 - Two-ray toggle
 - Standard 5 degree radial mode
 - Radio Mobile validation 2 degree radial mode
+- Raster-cell render mode for a Radio Mobile-style visual surface
 
-The **Radio Mobile validation 2 deg** mode increases the radial count from 72 to 180 for smoother bearing-by-bearing comparison. After running coverage, the **Download Radio Mobile CSV** export provides strong, moderate, and fringe reach distances for each bearing.
+The **Radio Mobile validation 2 deg** mode increases the radial count from 72 to 180 for smoother bearing-by-bearing comparison. The **Raster cells** render mode uses per-cell DEM/elevation ITM when the helper service supports it, then falls back to radial-derived raster cells if the raster endpoint is unavailable. After running coverage, the **Download Radio Mobile CSV** export provides strong, moderate, and fringe reach distances for each bearing.
 
 Radio Mobile remains the stronger reference tool today. This app is improving toward comparable behavior, but prediction trust should come from repeated comparison against Radio Mobile and real field measurements.
 
@@ -62,8 +66,8 @@ Radio Mobile remains the stronger reference tool today. This app is improving to
 
 The app provides four export paths:
 
-- **Export GeoJSON**: coverage polygons and site points with RF settings and prediction metadata.
-- **Export PDF**: readable summary report with coverage totals, RF settings, prediction settings, site details, and thresholds.
+- **Export GeoJSON**: coverage polygons and site points with RF settings, render mode, raster-cell counts, and prediction metadata.
+- **Export PDF**: readable summary report with coverage totals, RF settings, prediction settings, render mode, site details, and thresholds.
 - **Download validation report**: JSON report comparing imported field measurements against predicted signal levels.
 - **Download Radio Mobile CSV**: bearing-by-bearing reach table for Radio Mobile-style validation.
 
@@ -88,13 +92,14 @@ Coverage is built by sampling terrain around each transmitter site, estimating u
 
 Available model choices:
 
-- **ITS Irregular Terrain Model (ITM)**: default path using the 9M2PJU Longley-Rice service for radial path-loss samples.
+- **ITS Irregular Terrain Model (ITM)**: default path using the 9M2PJU Longley-Rice service for radial path-loss samples and per-cell raster coverage when available.
 - **ITM-style hybrid**: local approximation using free-space loss, terrain roughness, horizon effects, and terrain penalties.
 - **Enhanced Hata + terrain**: fast browser-side planning model with Hata/COST-style handling where appropriate.
 
 Important safeguards and assumptions:
 
 - Path loss is never allowed to drop below free-space path loss.
+- Native ITM samples start at 1 km; shorter validation points fall back to the browser-side short-path model.
 - Coverage edges use the first continuous radial failure point instead of a farthest isolated pass.
 - VHF and lower-UHF predictions use Hata-style behavior where appropriate.
 - High UHF is treated more cautiously with COST-231-style extension behavior.

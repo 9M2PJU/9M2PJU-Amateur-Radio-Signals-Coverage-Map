@@ -1,5 +1,8 @@
 const MIN_FREQUENCY_MHZ = 30;
 const MAX_FREQUENCY_MHZ = 30000;
+const ITM_API_MIN_DISTANCE_KM = 1;
+const ITM_API_DISTANCE_STEP_KM = 0.5;
+const MAX_PREDICTION_RANGE_KM = 120;
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 
@@ -66,6 +69,15 @@ const calculateShfRainLoss = (freq, distanceKm, rainRateMmH) => {
   return clamp(k * (rainRateMmH ** alpha) * effectiveDistanceKm, 0, 45);
 };
 
+const createItmDistanceGrid = (maxRangeKm = MAX_PREDICTION_RANGE_KM) => {
+  const cappedRangeKm = Math.max(ITM_API_MIN_DISTANCE_KM, maxRangeKm);
+  const distances = new Set([ITM_API_MIN_DISTANCE_KM, cappedRangeKm]);
+  for (let distanceKm = ITM_API_MIN_DISTANCE_KM + ITM_API_DISTANCE_STEP_KM; distanceKm <= cappedRangeKm; distanceKm += ITM_API_DISTANCE_STEP_KM) {
+    distances.add(Number(distanceKm.toFixed(3)));
+  }
+  return [...distances].filter((distanceKm) => distanceKm >= ITM_API_MIN_DISTANCE_KM && distanceKm <= cappedRangeKm).sort((a, b) => a - b);
+};
+
 const EFFECTIVE_EARTH_RADIUS_KM = 6371 * (4 / 3);
 const getElevationAtDistance = (radialSamples, distanceKm, fallbackElevation) => {
   if (!radialSamples.length || distanceKm <= 0) return fallbackElevation;
@@ -116,6 +128,7 @@ const calculateTerrainPenalty = (radialSamples, radiusKm, siteElevation, hTx, hR
 
 const getItmApiPathLoss = (itmLossMap, distanceKm) => {
   if (!itmLossMap?.length) return null;
+  if (distanceKm < itmLossMap[0].distanceKm) return null;
   if (distanceKm <= itmLossMap[0].distanceKm) return itmLossMap[0].lossDb;
   for (let index = 1; index < itmLossMap.length; index += 1) {
     const previous = itmLossMap[index - 1];
@@ -130,7 +143,7 @@ const getItmApiPathLoss = (itmLossMap, distanceKm) => {
 const findReliableDistanceFromLossMap = (itmLossMap, targetLoss, externalLoss = 0) => {
   let lastPassing = itmLossMap[0].distanceKm;
   let lastLoss = itmLossMap[0].lossDb + externalLoss;
-  if (lastLoss > targetLoss) return lastPassing;
+  if (lastLoss > targetLoss) return null;
 
   for (let index = 1; index < itmLossMap.length; index += 1) {
     const sample = itmLossMap[index];
@@ -166,6 +179,11 @@ assert(calculateShfRainLoss(145, 30, 50) === 0, 'Rain loss must not affect VHF')
 assert(calculateShfRainLoss(10368, 30, 50) > calculateShfRainLoss(5600, 30, 50), 'Rain loss should increase with SHF frequency');
 assert(calculateShfRainLoss(10368, 30, 80) > calculateShfRainLoss(10368, 30, 10), 'Rain loss should increase with rain rate');
 
+const itmDistanceGrid = createItmDistanceGrid(100);
+assert(itmDistanceGrid[0] === 1, 'Native ITM distance grid should start at 1 km');
+assert(!itmDistanceGrid.some((distanceKm) => distanceKm < 1), 'Native ITM distance grid must not include sub-1 km samples');
+assert(itmDistanceGrid.includes(100), 'Native ITM distance grid should include the requested max range');
+
 const clearPath = Array.from({ length: 20 }, (_, index) => ({ distanceKm: index + 1, elevation: 100 }));
 const blockedPath = clearPath.map((sample) => (
   sample.distanceKm === 5 ? { ...sample, elevation: 260 } : sample
@@ -180,7 +198,9 @@ const itmLossMap = [
   { distanceKm: 2, lossDb: 100 },
   { distanceKm: 3, lossDb: 120 },
 ];
+assert(getItmApiPathLoss(itmLossMap, 0.5) === null, 'Sub-1 km ITM interpolation should fall back to local model');
 assert(getItmApiPathLoss(itmLossMap, 1.5) === 95, 'ITM loss interpolation should be linear');
+assert(findReliableDistanceFromLossMap(itmLossMap, 85) === null, 'ITM search should fall back locally when first ITM sample already fails');
 assert(findReliableDistanceFromLossMap(itmLossMap, 110) > 2 && findReliableDistanceFromLossMap(itmLossMap, 110) < 3, 'Reliable distance should interpolate threshold crossing');
 assert(findReliableDistanceFromLossMap(itmLossMap, 110, 10) < findReliableDistanceFromLossMap(itmLossMap, 110, 0), 'External losses should reduce reliable distance');
 

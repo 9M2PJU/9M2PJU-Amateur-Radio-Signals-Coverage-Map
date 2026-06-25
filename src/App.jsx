@@ -141,6 +141,11 @@ const COVERAGE_RADIAL_OPTIONS = [
   { key: 'standard', label: 'Standard 5 deg', radials: RADIALS_COUNT },
   { key: 'radioMobile', label: 'Radio Mobile validation 2 deg', radials: 180 },
 ];
+const COVERAGE_RENDER_OPTIONS = [
+  { key: 'polygon', label: 'Radial polygons' },
+  { key: 'raster', label: 'Raster cells' },
+];
+const COVERAGE_RASTER_CELL_KM = 3;
 const SAMPLING_INTERVALS_KM = [
   0.25,
   0.5,
@@ -172,6 +177,8 @@ const ELEVATION_CACHE_STORAGE_KEY = '9m2pju-elevation-cache-v1';
 const ELEVATION_CACHE_MAX_ENTRIES = 40000;
 const ITM_API_URL = (import.meta.env.VITE_ITM_API_URL ?? 'https://itm.hamradio.my').replace(/\/$/, '');
 const ITM_API_TIMEOUT_MS = 18000;
+const ITM_RASTER_TIMEOUT_MS = 180000;
+const ITM_API_MIN_DISTANCE_KM = 1;
 const ITM_API_DISTANCE_STEP_KM = 0.5;
 const ITM_API_MAX_FREQUENCY_MHZ = 20000;
 const MIN_PREDICTION_RANGE_KM = 1;
@@ -206,13 +213,61 @@ const toGeoJsonPolygonRing = (points) => {
   if (first[0] !== last[0] || first[1] !== last[1]) ring.push([...first]);
   return ring;
 };
-const escapePdfText = (value) => String(value)
+const PDF_LINES_PER_PAGE = 44;
+const PDF_MAX_LINE_CHARS = 90;
+const PDF_DOWNLOAD_REVOKE_DELAY_MS = 1000;
+const sanitizePdfText = (value) => String(value ?? '')
+  .replace(/\t/g, '  ')
+  .replace(/[^\x20-\x7E]/g, '?');
+const escapePdfText = (value) => sanitizePdfText(value)
   .replace(/\\/g, '\\\\')
   .replace(/\(/g, '\\(')
-  .replace(/\)/g, '\\)')
-  .replace(/[^\x20-\x7E]/g, '?');
+  .replace(/\)/g, '\\)');
+const wrapPdfLine = (value, maxChars = PDF_MAX_LINE_CHARS) => {
+  const line = sanitizePdfText(value);
+  if (line.length <= maxChars) return [line];
+
+  const indent = line.match(/^\s*/)?.[0] ?? '';
+  const contentMaxChars = Math.max(1, maxChars - indent.length);
+  const words = line.trim().split(/\s+/);
+  const wrappedLines = [];
+  let currentLine = indent;
+
+  words.forEach((word) => {
+    const separator = currentLine.trim() ? ' ' : '';
+    const candidate = `${currentLine}${separator}${word}`;
+    if (candidate.length <= maxChars) {
+      currentLine = candidate;
+      return;
+    }
+
+    if (currentLine.trim()) wrappedLines.push(currentLine);
+    if (word.length <= contentMaxChars) {
+      currentLine = `${indent}${word}`;
+      return;
+    }
+
+    for (let index = 0; index < word.length; index += contentMaxChars) {
+      wrappedLines.push(`${indent}${word.slice(index, index + contentMaxChars)}`);
+    }
+    currentLine = indent;
+  });
+
+  if (currentLine.trim() || !wrappedLines.length) wrappedLines.push(currentLine);
+  return wrappedLines;
+};
+const downloadBlob = (blob, filename) => {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), PDF_DOWNLOAD_REVOKE_DELAY_MS);
+};
 const createSimplePdf = (title, sections) => {
-  const lines = [
+  const rawLines = [
     title,
     `Generated: ${new Date().toISOString()}`,
     '',
@@ -222,12 +277,13 @@ const createSimplePdf = (title, sections) => {
       '',
     ]),
   ];
-  const linesPerPage = 44;
+  const lines = rawLines.flatMap((line) => wrapPdfLine(line));
   const pages = [];
-  for (let index = 0; index < lines.length; index += linesPerPage) {
-    pages.push(lines.slice(index, index + linesPerPage));
+  for (let index = 0; index < lines.length; index += PDF_LINES_PER_PAGE) {
+    pages.push(lines.slice(index, index + PDF_LINES_PER_PAGE));
   }
 
+  const encoder = new TextEncoder();
   const objects = [''];
   const pageObjectNumbers = [];
   const contentObjectNumbers = [];
@@ -249,12 +305,12 @@ const createSimplePdf = (title, sections) => {
       )),
       'ET',
     ].join('\n');
-    const contentNumber = addObject(`<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`);
+    const contentNumber = addObject(`<< /Length ${encoder.encode(stream).length} >>\nstream\n${stream}\nendstream`);
     contentObjectNumbers.push(contentNumber);
     pageObjectNumbers.push(null);
   });
 
-  const pagesNumber = objects.length + pages.length + 1;
+  const pagesNumber = objects.length + pages.length;
   const fontNumber = pagesNumber + 1;
   const catalogNumber = fontNumber + 1;
 
@@ -268,16 +324,16 @@ const createSimplePdf = (title, sections) => {
   let pdf = '%PDF-1.4\n';
   const offsets = [0];
   objects.slice(1).forEach((body, index) => {
-    offsets.push(pdf.length);
+    offsets.push(encoder.encode(pdf).length);
     pdf += `${index + 1} 0 obj\n${body}\nendobj\n`;
   });
-  const xrefOffset = pdf.length;
+  const xrefOffset = encoder.encode(pdf).length;
   pdf += `xref\n0 ${objects.length}\n0000000000 65535 f \n`;
   offsets.slice(1).forEach((offset) => {
     pdf += `${String(offset).padStart(10, '0')} 00000 n \n`;
   });
-  pdf += `trailer\n<< /Size ${objects.length} /Root ${catalogNumber} 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
-  return pdf;
+  pdf += `trailer\n<< /Size ${objects.length} /Root ${catalogNumber} 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
+  return encoder.encode(pdf);
 };
 const getTerrainProfileCacheKey = ([lat, lon], radialCount = RADIALS_COUNT) => [
   normalizeCoordinate(lat),
@@ -308,6 +364,8 @@ const createSite = (id, position, color) => ({
   haat: 30,
   status: 'pending',
   coveragePolygons: { ...EMPTY_POLYGONS },
+  rasterCells: [],
+  coverageSource: 'radial-polygon',
   areas: { ...EMPTY_AREAS },
 });
 
@@ -377,6 +435,46 @@ const calculateBearingDegrees = ([lat1, lon1], [lat2, lon2]) => {
     Math.sin(phi1) * Math.cos(phi2) * Math.cos(deltaLon);
 
   return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+};
+
+const createCoverageRasterCells = ({ sitePosition, polygons, maxRangeKm, cellKm = COVERAGE_RASTER_CELL_KM }) => {
+  if (!sitePosition || !polygons?.weak?.length) return [];
+
+  const [siteLat, siteLon] = sitePosition;
+  const latStep = cellKm / 111.32;
+  const lonKmPerDegree = Math.max(20, 111.32 * Math.cos(siteLat * Math.PI / 180));
+  const lonStep = cellKm / lonKmPerDegree;
+  const halfLat = latStep / 2;
+  const halfLon = lonStep / 2;
+  const gridRadius = Math.ceil(maxRangeKm / cellKm);
+  const gradeOrder = ['strong', 'moderate', 'weak'];
+  const cells = [];
+
+  for (let latIndex = -gridRadius; latIndex <= gridRadius; latIndex++) {
+    const lat = siteLat + latIndex * latStep;
+
+    for (let lonIndex = -gridRadius; lonIndex <= gridRadius; lonIndex++) {
+      const lon = siteLon + lonIndex * lonStep;
+      const center = [lat, lon];
+      if (haversineDistanceKm(sitePosition, center) > maxRangeKm) continue;
+
+      const gradeKey = gradeOrder.find((key) => pointInPolygon(center, polygons[key]));
+      if (!gradeKey) continue;
+
+      cells.push({
+        id: `${gradeKey}-${latIndex}-${lonIndex}`,
+        gradeKey,
+        bounds: [
+          [lat - halfLat, lon - halfLon],
+          [lat - halfLat, lon + halfLon],
+          [lat + halfLat, lon + halfLon],
+          [lat + halfLat, lon - halfLon],
+        ],
+      });
+    }
+  }
+
+  return cells;
 };
 
 const normalizeBearingDelta = (bearing, centerBearing) => {
@@ -936,14 +1034,15 @@ const fetchWithTimeout = async (url, options = {}, timeoutMs = ELEVATION_TIMEOUT
 };
 
 const createItmDistanceGrid = (maxRangeKm = MAX_PREDICTION_RANGE_KM) => {
-  const distances = new Set([0.1, 0.25, 0.5, 1]);
-  for (let distanceKm = 1.5; distanceKm <= maxRangeKm; distanceKm += ITM_API_DISTANCE_STEP_KM) {
+  const cappedRangeKm = Math.max(ITM_API_MIN_DISTANCE_KM, maxRangeKm);
+  const distances = new Set([ITM_API_MIN_DISTANCE_KM, cappedRangeKm]);
+  for (let distanceKm = ITM_API_MIN_DISTANCE_KM + ITM_API_DISTANCE_STEP_KM; distanceKm <= cappedRangeKm; distanceKm += ITM_API_DISTANCE_STEP_KM) {
     distances.add(Number(distanceKm.toFixed(3)));
   }
   SAMPLING_INTERVALS_KM.forEach((distanceKm) => {
-    if (distanceKm <= maxRangeKm) distances.add(distanceKm);
+    if (distanceKm >= ITM_API_MIN_DISTANCE_KM && distanceKm <= cappedRangeKm) distances.add(distanceKm);
   });
-  return [...distances].filter((distanceKm) => distanceKm <= maxRangeKm).sort((a, b) => a - b);
+  return [...distances].filter((distanceKm) => distanceKm >= ITM_API_MIN_DISTANCE_KM && distanceKm <= cappedRangeKm).sort((a, b) => a - b);
 };
 
 const fetchItmRadialLosses = async ({
@@ -984,8 +1083,81 @@ const fetchItmRadialLosses = async ({
   return data;
 };
 
+const fetchPerCellRasterCoverage = async ({
+  site,
+  freq,
+  hTx,
+  hRx,
+  powerDbm,
+  gain,
+  rxAntennaGain,
+  systemLossDb,
+  activeClutterLossDb,
+  maxRangeKm,
+  serviceGrades,
+  confidence,
+  reliability,
+  antennaAzimuth,
+  antennaBeamwidth,
+  frontBackRatio,
+  rainRateMmH,
+  atmosphericLossDbPerKm,
+  useTwoRay,
+}) => {
+  if (!ITM_API_URL || freq > ITM_API_MAX_FREQUENCY_MHZ) return null;
+  const thresholdsDbm = serviceGrades.reduce((thresholds, grade) => ({
+    ...thresholds,
+    [grade.key]: grade.thresholdDbm,
+  }), {});
+
+  const resp = await fetchWithTimeout(`${ITM_API_URL}/coverage/raster`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      site: {
+        lat: site.position[0],
+        lon: site.position[1],
+        elevationM: site.elevation,
+      },
+      frequencyMhz: freq,
+      txHeightM: hTx,
+      rxHeightM: hRx,
+      txPowerDbm: powerDbm,
+      txGainDbi: gain,
+      rxGainDbi: rxAntennaGain,
+      systemLossDb,
+      clutterLossDb: activeClutterLossDb,
+      maxRangeKm,
+      cellSizeKm: COVERAGE_RASTER_CELL_KM,
+      profileStepKm: 2,
+      thresholdsDbm,
+      confidence,
+      reliability,
+      climate: 1,
+      polarization: 1,
+      groundPermittivity: 15,
+      groundConductivity: 0.005,
+      surfaceRefractivity: 301,
+      antenna: {
+        azimuth: antennaAzimuth,
+        beamwidth: antennaBeamwidth,
+        frontBackRatio,
+      },
+      rainRateMmH,
+      atmosphericLossDbPerKm,
+      useTwoRay,
+    }),
+  }, ITM_RASTER_TIMEOUT_MS);
+
+  if (!resp.ok) throw new Error(`ITM raster API failed: ${resp.status}`);
+  const data = await resp.json();
+  if (!Array.isArray(data.cells) || !data.areas) throw new Error('ITM raster API returned no cell result');
+  return data;
+};
+
 const getItmApiPathLoss = (itmLossMap, distanceKm) => {
   if (!itmLossMap?.length) return null;
+  if (distanceKm < itmLossMap[0].distanceKm) return null;
   if (distanceKm <= itmLossMap[0].distanceKm) return itmLossMap[0].lossDb;
 
   for (let index = 1; index < itmLossMap.length; index++) {
@@ -1050,7 +1222,7 @@ const findReliableDistanceFromLossMap = ({
     useTwoRay,
   });
 
-  if (lastLoss > targetLoss) return lastPassing;
+  if (lastLoss > targetLoss) return null;
 
   for (let index = 1; index < itmLossMap.length; index++) {
     const sample = itmLossMap[index];
@@ -1192,17 +1364,28 @@ const pointInPolygon = ([lat, lon], polygon) => {
   return inside;
 };
 
+const geoJsonRingToLatLon = (ring) => ring.map(([lon, lat]) => [lat, lon]);
+
+const pointInGeoJsonRingSet = (position, rings) => {
+  if (!Array.isArray(rings) || !rings.length) return false;
+  const [outerRing, ...holeRings] = rings;
+  if (!pointInPolygon(position, geoJsonRingToLatLon(outerRing))) return false;
+  return !holeRings.some((ring) => pointInPolygon(position, geoJsonRingToLatLon(ring)));
+};
+
 const pointInGeoJsonFeature = (position, feature) => {
   const geometry = feature?.geometry;
   if (!geometry) return false;
 
-  const rings = geometry.type === 'Polygon'
-    ? geometry.coordinates
-    : geometry.type === 'MultiPolygon'
-      ? geometry.coordinates.flat()
-      : [];
+  if (geometry.type === 'Polygon') {
+    return pointInGeoJsonRingSet(position, geometry.coordinates);
+  }
 
-  return rings.some((ring) => pointInPolygon(position, ring.map(([lon, lat]) => [lat, lon])));
+  if (geometry.type === 'MultiPolygon') {
+    return geometry.coordinates.some((rings) => pointInGeoJsonRingSet(position, rings));
+  }
+
+  return false;
 };
 
 const getPolygonBounds = (polygons) => {
@@ -1249,10 +1432,24 @@ const calculateUnionAreaKm2 = (polygons) => {
   return coveredCells * cellLatKm * cellLonKm;
 };
 
+const RASTER_GRADE_RANK = { weak: 1, moderate: 2, strong: 3 };
+const getCoverageGeometryForGrade = (site, gradeKey) => {
+  if (site.coverageSource === 'per-cell-raster' && site.rasterCells?.length) {
+    const minimumRank = RASTER_GRADE_RANK[gradeKey] ?? 0;
+    return site.rasterCells
+      .filter((cell) => (RASTER_GRADE_RANK[cell.gradeKey] ?? 0) >= minimumRank)
+      .map((cell) => cell.bounds)
+      .filter((bounds) => bounds?.length >= 3);
+  }
+
+  const polygon = site.coveragePolygons?.[gradeKey];
+  return polygon?.length >= 3 ? [polygon] : [];
+};
+
 const calculateCombinedCoverageAreas = (sites) => ({
-  strong: calculateUnionAreaKm2(sites.map((site) => site.coveragePolygons.strong)),
-  moderate: calculateUnionAreaKm2(sites.map((site) => site.coveragePolygons.moderate)),
-  weak: calculateUnionAreaKm2(sites.map((site) => site.coveragePolygons.weak)),
+  strong: calculateUnionAreaKm2(sites.flatMap((site) => getCoverageGeometryForGrade(site, 'strong'))),
+  moderate: calculateUnionAreaKm2(sites.flatMap((site) => getCoverageGeometryForGrade(site, 'moderate'))),
+  weak: calculateUnionAreaKm2(sites.flatMap((site) => getCoverageGeometryForGrade(site, 'weak'))),
 });
 
 const parseAntennaPatternCsv = (text) => {
@@ -1405,7 +1602,9 @@ function App() {
   const [strongSignalMarginDb, setStrongSignalMarginDb] = useState(10);
   const [maxRangeKm, setMaxRangeKm] = useState(100);
   const [itmReliabilityPercent, setItmReliabilityPercent] = useState(70);
+  const [itmConfidencePercent, setItmConfidencePercent] = useState(50);
   const [coverageRadialMode, setCoverageRadialMode] = useState('standard');
+  const [coverageRenderMode, setCoverageRenderMode] = useState('polygon');
   const [useLandCover, setUseLandCover] = useState(false);
   const [useTwoRay, setUseTwoRay] = useState(false);
   const [antennaAzimuth, setAntennaAzimuth] = useState(0);
@@ -1555,6 +1754,7 @@ function App() {
         strongSignalMarginDb,
         maxRangeKm,
         itmReliabilityPercent,
+        itmConfidencePercent,
         antennaAzimuth,
         antennaBeamwidth,
         frontBackRatio,
@@ -1570,6 +1770,7 @@ function App() {
         rainRateMmH: rainRate,
         atmosphericLossDbPerKm: atmosphericLoss,
         radialCount: activeRadialCount,
+        renderMode: coverageRenderMode,
         terrainSamplesPerRadial: SAMPLING_INTERVALS_KM.length,
         terrainMaxDistanceKm: maxRangeKm,
         sites: sites.map((site) => ({
@@ -1596,6 +1797,7 @@ function App() {
     clutterMap,
     clutterKey,
     confidenceScore,
+    coverageRenderMode,
     fadeMargin,
     fringeThresholdDbm,
     frontBackRatio,
@@ -1603,6 +1805,7 @@ function App() {
     gain,
     hRx,
     hTx,
+    itmConfidencePercent,
     itmReliabilityPercent,
     maxRangeKm,
     measurements,
@@ -1696,10 +1899,38 @@ function App() {
   const updateActiveSitePosition = useCallback((position) => {
     setSites((currentSites) => currentSites.map((site) => (
       site.id === activeSiteId
-        ? { ...site, position, status: 'pending', coveragePolygons: { ...EMPTY_POLYGONS }, areas: { ...EMPTY_AREAS } }
+        ? { ...site, position, status: 'pending', coveragePolygons: { ...EMPTY_POLYGONS }, rasterCells: [], coverageSource: 'radial-polygon', areas: { ...EMPTY_AREAS } }
         : site
     )));
   }, [activeSiteId]);
+
+  const applyRadioMobilePreset = useCallback(() => {
+    setModeKey('fm');
+    setPropagationModel('ntiaItmApi');
+    setFreqBand('vhf');
+    setFreq(145);
+    setPower(5);
+    setHTx(10);
+    setHRx(10);
+    setGain(6);
+    setRxAntennaGain(2);
+    setTxLineLoss(3);
+    setRxLineLoss(0.5);
+    setRxThresholdUv(0.5);
+    setStrongSignalMarginDb(10);
+    setMaxRangeKm(100);
+    setItmReliabilityPercent(70);
+    setItmConfidencePercent(50);
+    setFadeMargin(0);
+    setCoverageRadialMode('radioMobile');
+    setCoverageRenderMode('raster');
+    setUseLandCover(false);
+    setUseTwoRay(false);
+    setAntennaAzimuth(0);
+    setAntennaBeamwidth(360);
+    setFrontBackRatio(0);
+    setAnalysisNotice('Radio Mobile comparison preset applied. Run coverage to refresh the map.');
+  }, []);
 
   const addCoverageSite = useCallback(() => {
     if (sites.length >= MAX_SITES || !activeSite) return;
@@ -1840,6 +2071,7 @@ function App() {
       strongSignalMarginDb,
       maxRangeKm,
       itmReliabilityPercent,
+      itmConfidencePercent,
       propagationModel,
       propagationModelLabel: PROPAGATION_MODELS[propagationModel]?.label ?? propagationModel,
       useLandCover,
@@ -1847,6 +2079,8 @@ function App() {
       useTwoRay,
       coverageRadialMode,
       coverageRadials: activeRadialCount,
+      coverageRenderMode,
+      rasterCellKm: coverageRenderMode === 'raster' ? COVERAGE_RASTER_CELL_KM : null,
       antennaAzimuth,
       antennaBeamwidth,
       frontBackRatio,
@@ -1872,6 +2106,8 @@ function App() {
         haatM: Number((site.haat ?? 0).toFixed(2)),
         confidence: site.confidence,
         status: site.status,
+        coverageSource: site.coverageSource,
+        rasterEngine: site.rasterEngine,
         color: site.color,
       },
     }));
@@ -1900,7 +2136,10 @@ function App() {
               fillOpacity: grade.fillOpacity,
               model: site.model,
               engine: site.model === 'ntiaItmApi' ? 'itm-api-with-local-fallback' : site.model,
+              coverageSource: site.coverageSource,
+              rasterEngine: site.rasterEngine,
               coverageRadials: site.coverageRadials,
+              rasterCells: site.rasterCells?.filter((cell) => cell.gradeKey === grade.key).length ?? 0,
               itmWarningSamples: site.itmWarningSamples ?? 0,
               itmErrorSamples: site.itmErrorSamples ?? 0,
             },
@@ -1925,14 +2164,7 @@ function App() {
     };
 
     const blob = new Blob([JSON.stringify(geojson, null, 2)], { type: 'application/geo+json' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `9m2pju-coverage-result-${new Date().toISOString().slice(0, 10)}.geojson`;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(url);
+    downloadBlob(blob, `9m2pju-coverage-result-${new Date().toISOString().slice(0, 10)}.geojson`);
   }, [
     activeRadialCount,
     antennaAzimuth,
@@ -1942,6 +2174,7 @@ function App() {
     clutterKey,
     combinedAreas,
     coverageRadialMode,
+    coverageRenderMode,
     fadeMargin,
     freq,
     freqBand,
@@ -1950,6 +2183,7 @@ function App() {
     gain,
     hRx,
     hTx,
+    itmConfidencePercent,
     itmReliabilityPercent,
     maxRangeKm,
     power,
@@ -2010,8 +2244,10 @@ function App() {
         lines: [
           `Model: ${PROPAGATION_MODELS[propagationModel]?.label ?? propagationModel}`,
           `ITM reliability: ${itmReliabilityPercent}%`,
+          `ITM confidence: ${itmConfidencePercent}%`,
           `Max range: ${maxRangeKm} km`,
           `Radial mode: ${coverageRadialMode} (${activeRadialCount} radials)`,
+          `Render mode: ${coverageRenderMode}${coverageRenderMode === 'raster' ? ` (${COVERAGE_RASTER_CELL_KM} km cells)` : ''}`,
           `Land cover: ${useLandCover ? CLUTTER_PROFILES[clutterKey]?.label ?? clutterKey : 'off'}`,
           `Two-ray loss: ${useTwoRay ? 'on' : 'off'}`,
           `Antenna azimuth: ${antennaAzimuth} deg`,
@@ -2030,6 +2266,8 @@ function App() {
           `${site.name}: ${site.position[0].toFixed(6)}, ${site.position[1].toFixed(6)}`,
           `  Elevation: ${site.elevation} m AMSL, HAAT: ${(site.haat ?? 0).toFixed(1)} m, confidence: ${site.confidence?.toFixed?.(0) ?? site.confidence}%`,
           `  Strong: ${formatArea(site.areas?.strong)}, Moderate: ${formatArea(site.areas?.moderate)}, Fringe: ${formatArea(site.areas?.weak)}`,
+          `  Render source: ${site.coverageSource === 'per-cell-raster' ? 'per-cell DEM raster ITM' : 'radial-derived coverage'}`,
+          `  Raster cells: ${site.rasterCells?.length ?? 0}, tested cells: ${site.rasterStats?.testedCells ?? 'n/a'}`,
           `  Engine warnings: ${site.itmWarningSamples ?? 0}, errors: ${site.itmErrorSamples ?? 0}`,
         ]),
       },
@@ -2041,14 +2279,7 @@ function App() {
 
     const pdf = createSimplePdf('9M2PJU Coverage Prediction Result', sections);
     const blob = new Blob([pdf], { type: 'application/pdf' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `9m2pju-coverage-result-${new Date().toISOString().slice(0, 10)}.pdf`;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(url);
+    downloadBlob(blob, `9m2pju-coverage-result-${new Date().toISOString().slice(0, 10)}.pdf`);
   }, [
     activeRadialCount,
     antennaAzimuth,
@@ -2058,6 +2289,7 @@ function App() {
     clutterKey,
     combinedAreas,
     coverageRadialMode,
+    coverageRenderMode,
     fadeMargin,
     freq,
     freqBand,
@@ -2066,6 +2298,7 @@ function App() {
     gain,
     hRx,
     hTx,
+    itmConfidencePercent,
     itmReliabilityPercent,
     maxRangeKm,
     power,
@@ -2113,6 +2346,7 @@ function App() {
       totalSystemLossDb: systemLossDb,
       rxThresholdUv,
       itmReliabilityPercent,
+      itmConfidencePercent,
       maxRangeKm,
       useLandCover,
       useTwoRay,
@@ -2130,19 +2364,13 @@ function App() {
       ...rows.map((row) => headers.map((header) => escapeCsvCell(row[header])).join(',')),
     ].join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `9m2pju-radio-mobile-comparison-${new Date().toISOString().slice(0, 10)}.csv`;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(url);
+    downloadBlob(blob, `9m2pju-radio-mobile-comparison-${new Date().toISOString().slice(0, 10)}.csv`);
   }, [
     freq,
     gain,
     hRx,
     hTx,
+    itmConfidencePercent,
     itmReliabilityPercent,
     maxRangeKm,
     power,
@@ -2221,7 +2449,7 @@ function App() {
             siteElevation,
             radialSamples,
             distancesKm: itmDistanceGrid,
-            confidence: confidenceScore,
+            confidence: itmConfidencePercent,
             reliability: itmReliabilityPercent,
           });
           itmApiLossMap = apiResult?.losses
@@ -2344,11 +2572,77 @@ function App() {
     const avgMarginDb = radialMargins.length
       ? radialMargins.reduce((total, margin) => total + margin, 0) / radialMargins.length
       : 0;
+    let rasterCells = createCoverageRasterCells({
+      sitePosition: site.position,
+      polygons: newPolygons,
+      maxRangeKm,
+    });
+    let coverageSource = 'radial-polygon';
+    let rasterStats = null;
+    let rasterEngine = 'radial-derived';
+    let rasterAreas = {
+      strong: calculateAreaKm2(newPolygons.strong),
+      moderate: calculateAreaKm2(newPolygons.moderate),
+      weak: calculateAreaKm2(newPolygons.weak),
+    };
+
+    if (coverageRenderMode === 'raster' && propagationModel === 'ntiaItmApi' && freq <= ITM_API_MAX_FREQUENCY_MHZ) {
+      try {
+        const rasterResult = await fetchPerCellRasterCoverage({
+          site: { ...site, elevation: siteElevation },
+          freq,
+          hTx,
+          hRx,
+          powerDbm,
+          gain,
+          rxAntennaGain,
+          systemLossDb,
+          activeClutterLossDb,
+          maxRangeKm,
+          serviceGrades,
+          confidence: itmConfidencePercent,
+          reliability: itmReliabilityPercent,
+          antennaAzimuth,
+          antennaBeamwidth,
+          frontBackRatio,
+          rainRateMmH: rainRate,
+          atmosphericLossDbPerKm: atmosphericLoss,
+          useTwoRay,
+        });
+
+        if (rasterResult) {
+          rasterCells = rasterResult.cells ?? [];
+          coverageSource = 'per-cell-raster';
+          rasterEngine = rasterResult.engine ?? 'per-cell-raster';
+          rasterStats = rasterResult.stats ?? null;
+          rasterAreas = {
+            strong: Number(rasterResult.areas?.strong ?? 0),
+            moderate: Number(rasterResult.areas?.moderate ?? 0),
+            weak: Number(rasterResult.areas?.weak ?? 0),
+          };
+          itmWarningSamples += Number(rasterStats?.warningSamples ?? 0);
+          itmErrorSamples += Number(rasterStats?.errorSamples ?? 0);
+          if (Number(rasterStats?.fallbackCells ?? 0) > 0) itmApiFallbacks += 1;
+          if (Number(rasterStats?.errorSamples ?? 0) > 0) {
+            setItmApiStatus({ state: 'warning', message: `Per-cell raster ITM completed with ${rasterStats.errorSamples} native error-code cell${rasterStats.errorSamples > 1 ? 's' : ''}.` });
+          } else if (Number(rasterStats?.warningSamples ?? 0) > 0) {
+            setItmApiStatus({ state: 'warning', message: `Per-cell raster ITM completed with ${rasterStats.warningSamples} warning cell${rasterStats.warningSamples > 1 ? 's' : ''}.` });
+          } else if (Number(rasterStats?.fallbackCells ?? 0) > 0) {
+            setItmApiStatus({ state: 'fallback', message: 'Per-cell raster completed, but some cells used the helper fallback engine.' });
+          } else {
+            setItmApiStatus({ state: 'ready', message: `Per-cell DEM raster ITM completed for ${rasterStats?.testedCells ?? rasterCells.length} receiver cells.` });
+          }
+        }
+      } catch (error) {
+        console.warn(`Per-cell raster ITM failed for ${site.name}; using radial-derived raster`, error);
+        setItmApiStatus({ state: 'warning', message: 'Per-cell raster ITM was unavailable; raster display fell back to radial-derived cells.' });
+      }
+    }
 
     return {
       ...site,
       elevation: siteElevation,
-      haat: Math.max(2, avgHaat),
+      haat: Number.isFinite(avgHaat) ? avgHaat : hTx,
       confidence: confidenceScore,
       avgMarginDb,
       model: propagationModel,
@@ -2360,11 +2654,11 @@ function App() {
       itmErrorSamples,
       radioMobileRows,
       coveragePolygons: newPolygons,
-      areas: {
-        strong: calculateAreaKm2(newPolygons.strong),
-        moderate: calculateAreaKm2(newPolygons.moderate),
-        weak: calculateAreaKm2(newPolygons.weak),
-      },
+      rasterCells,
+      coverageSource,
+      rasterEngine,
+      rasterStats,
+      areas: rasterAreas,
       status: failedChunks > 0 ? 'degraded' : 'analyzed',
       failedChunks,
     };
@@ -2380,11 +2674,13 @@ function App() {
     clutterMap,
     confidenceScore,
     coverageRadialMode,
+    coverageRenderMode,
     freq,
     frontBackRatio,
     gain,
     hRx,
     hTx,
+    itmConfidencePercent,
     itmReliabilityPercent,
     maxRangeKm,
     powerDbm,
@@ -2529,6 +2825,9 @@ function App() {
               <div className={`analysis-notice ${analysisNotice.includes('could not') ? 'error' : analysisNotice.includes('fallback') ? 'warning' : ''}`}>
                 {analysisNotice}
               </div>
+              <button className="secondary-button export-result-button" type="button" onClick={applyRadioMobilePreset} disabled={isAnalyzing}>
+                <Radio size={14} /> Radio Mobile preset
+              </button>
               <button className="secondary-button export-result-button" type="button" onClick={exportCoverageResult} disabled={!analyzedSites}>
                 <Download size={14} /> Export GeoJSON
               </button>
@@ -2551,6 +2850,9 @@ function App() {
             </button>
             <button className="secondary-button export-result-button" type="button" onClick={exportCoveragePdf} disabled={!analyzedSites}>
               <FileText size={14} /> Export PDF
+            </button>
+            <button className="secondary-button export-result-button" type="button" onClick={applyRadioMobilePreset} disabled={isAnalyzing}>
+              <Radio size={14} /> Radio Mobile preset
             </button>
             <div className="mobile-metrics">
               <div className="mobile-metric-card">
@@ -2729,7 +3031,7 @@ function App() {
               </>
             )}
             <div className="engineering-summary">
-              Confidence estimate: {confidenceScore.toFixed(0)}% · {modelReliability.label} reliability · clutter uncertainty ±{activeClutterUncertaintyDb} dB
+              Planning confidence: {confidenceScore.toFixed(0)}% · {modelReliability.label} reliability · clutter uncertainty ±{activeClutterUncertaintyDb} dB
             </div>
             <div className="mode-note">
               {modelReliability.notes[0]}
@@ -2760,9 +3062,19 @@ function App() {
               <label>ITM reliability %
                 <input className="numeric-input compact-input" type="number" min="1" max="99" step="1" value={itmReliabilityPercent} onChange={(e) => setItmReliabilityPercent(clamp(toNumber(e.target.value), 1, 99))} />
               </label>
+              <label>ITM confidence %
+                <input className="numeric-input compact-input" type="number" min="1" max="99" step="1" value={itmConfidencePercent} onChange={(e) => setItmConfidencePercent(clamp(toNumber(e.target.value), 1, 99))} />
+              </label>
               <label>Validation mode
                 <select className="mini-select" value={coverageRadialMode} onChange={(e) => setCoverageRadialMode(e.target.value)}>
                   {COVERAGE_RADIAL_OPTIONS.map((option) => (
+                    <option key={option.key} value={option.key}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
+              <label>Render mode
+                <select className="mini-select" value={coverageRenderMode} onChange={(e) => setCoverageRenderMode(e.target.value)}>
+                  {COVERAGE_RENDER_OPTIONS.map((option) => (
                     <option key={option.key} value={option.key}>{option.label}</option>
                   ))}
                 </select>
@@ -2786,7 +3098,7 @@ function App() {
               </label>
             </div>
             <div className="engineering-summary">
-              RX threshold {fringeThresholdDbm.toFixed(2)} dBm · {activeRadialCount} radials · total loss {systemLossDb.toFixed(1)} dB
+              RX threshold {fringeThresholdDbm.toFixed(2)} dBm · ITM {itmReliabilityPercent}%/{itmConfidencePercent}% · {activeRadialCount} radials · {coverageRenderMode === 'raster' ? `${COVERAGE_RASTER_CELL_KM} km per-cell raster` : 'polygon render'} · total loss {systemLossDb.toFixed(1)} dB
             </div>
           </div>
 
@@ -2920,19 +3232,38 @@ function App() {
 
         {sites.map((site) => (
           <React.Fragment key={`coverage-${site.id}`}>
-            {serviceGrades.map((grade) => site.coveragePolygons[grade.key] && (
-              <Polygon
-                key={`${site.id}-${grade.key}`}
-                positions={site.coveragePolygons[grade.key]}
-                pathOptions={{
-                  color: grade.color,
-                  fillColor: grade.color,
-                  fillOpacity: grade.fillOpacity,
-                  weight: site.id === activeSiteId ? grade.weight + 1 : grade.weight,
-                  dashArray: grade.dashArray,
-                }}
-              />
-            ))}
+            {coverageRenderMode === 'raster' && (site.coverageSource === 'per-cell-raster' || site.rasterCells?.length)
+              ? site.rasterCells.map((cell) => {
+                const grade = serviceGrades.find((item) => item.key === cell.gradeKey);
+                if (!grade) return null;
+
+                return (
+                  <Polygon
+                    key={`${site.id}-cell-${cell.id}`}
+                    positions={cell.bounds}
+                    pathOptions={{
+                      color: grade.color,
+                      fillColor: grade.color,
+                      fillOpacity: Math.min(0.42, grade.fillOpacity + 0.12),
+                      weight: 0,
+                      interactive: false,
+                    }}
+                  />
+                );
+              })
+              : serviceGrades.map((grade) => site.coveragePolygons[grade.key] && (
+                <Polygon
+                  key={`${site.id}-${grade.key}`}
+                  positions={site.coveragePolygons[grade.key]}
+                  pathOptions={{
+                    color: grade.color,
+                    fillColor: grade.color,
+                    fillOpacity: grade.fillOpacity,
+                    weight: site.id === activeSiteId ? grade.weight + 1 : grade.weight,
+                    dashArray: grade.dashArray,
+                  }}
+                />
+              ))}
           </React.Fragment>
         ))}
 
@@ -2949,6 +3280,7 @@ function App() {
                 Elev: {site.elevation}m AMSL | HAAT: {site.haat.toFixed(1)}m<br />
                 Fringe: {site.areas.weak.toFixed(0)} km²<br />
                 Model: {PROPAGATION_MODELS[site.model]?.label ?? modelProfile.label}<br />
+                Render: {site.coverageSource === 'per-cell-raster' ? `per-cell raster (${site.rasterStats?.testedCells ?? site.rasterCells?.length ?? 0} cells)` : 'radial polygon'}<br />
                 Confidence: {(site.confidence ?? confidenceScore).toFixed(0)}% | Avg margin: {(site.avgMarginDb ?? 0).toFixed(1)} dB
               </div>
             </Popup>
@@ -3025,12 +3357,16 @@ function App() {
               <dd>Receiver antenna gain. Use negative values for poor antennas or body/vehicle loss.</dd>
               <dt>Fade margin</dt>
               <dd>Extra safety margin in dB for fading, weather, movement, and real-world uncertainty.</dd>
-              <dt>Noise figure</dt>
-              <dd>Receiver noise performance. Lower is better; higher values need stronger signals.</dd>
-              <dt>Required SNR</dt>
-              <dd>Signal-to-noise ratio needed for usable copy. Higher SNR means smaller predicted coverage.</dd>
-              <dt>Bandwidth</dt>
-              <dd>Receiver bandwidth. Wider bandwidth raises noise floor and may need stronger signal.</dd>
+              <dt>RX threshold</dt>
+              <dd>Minimum receive level for the fringe boundary, entered in microvolts and shown as dBm.</dd>
+              <dt>ITM reliability</dt>
+              <dd>Reliability percentage sent to the ITM service for Longley-Rice path-loss sampling.</dd>
+              <dt>ITM confidence</dt>
+              <dd>Confidence percentage sent to the ITM service. Keep 50% for Radio Mobile-style comparison unless you need a more conservative statistical case.</dd>
+              <dt>Render mode</dt>
+              <dd>Choose radial polygons for clean boundaries or raster cells for Radio Mobile-style visual comparison.</dd>
+              <dt>Radio Mobile preset</dt>
+              <dd>Applies matching comparison values such as 145 MHz, 5 W, 100 km range, 70% reliability, 50% confidence, 0.5 uV threshold, 180 radials, and raster rendering.</dd>
               <dt>Antenna pattern</dt>
               <dd>Azimuth points the antenna, beamwidth sets its main lobe width, and F/B ratio reduces back-side coverage.</dd>
               <dt>Frequency</dt>

@@ -532,6 +532,15 @@ const calculateAreaKm2 = (points) => {
 };
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+const getBandKeyForFrequency = (frequencyMhz) => (
+  BAND_OPTIONS.find((band) => frequencyMhz >= band.min && frequencyMhz <= band.max)?.key ??
+  (frequencyMhz < 300 ? 'vhf' : frequencyMhz < 3000 ? 'uhf' : 'shf')
+);
+const getStrongMarginForModeProfile = (profile) => clamp(
+  Number(profile?.thresholds?.strong ?? 0) - Number(profile?.thresholds?.weak ?? 0),
+  0,
+  60,
+);
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const formatPower = (value) => (value < 10 ? value.toFixed(1).replace(/\.0$/, '') : value.toFixed(0));
 const toNumber = (value, fallback = 0) => {
@@ -1235,7 +1244,7 @@ const findReliableDistance = ({
     atmosphericLossDbPerKm,
     useTwoRay,
   }) > targetLoss) {
-    return low;
+    return 0;
   }
 
   for (const distanceKm of searchDistances.slice(1)) {
@@ -2123,6 +2132,10 @@ function App() {
       const value = Number(params.get(key));
       return Number.isFinite(value) ? value : fallback;
     };
+    const getParamBoolean = (key, fallback) => {
+      if (!params.has(key)) return fallback;
+      return ['1', 'true', 'yes', 'on'].includes(String(params.get(key)).toLowerCase());
+    };
 
     const lat = getParamNumber('lat', null);
     const lon = getParamNumber('lon', null);
@@ -2134,22 +2147,50 @@ function App() {
       )));
     }
 
-    if (params.has('freq')) setFreq(clamp(getParamNumber('freq', freq), MIN_FREQUENCY_MHZ, MAX_FREQUENCY_MHZ));
+    if (params.has('freq')) {
+      const nextFreq = clamp(getParamNumber('freq', freq), MIN_FREQUENCY_MHZ, MAX_FREQUENCY_MHZ);
+      setFreq(nextFreq);
+      if (!params.has('band')) setFreqBand(getBandKeyForFrequency(nextFreq));
+    }
+    if (params.has('band') && BAND_OPTIONS.some((option) => option.key === params.get('band'))) setFreqBand(params.get('band'));
     if (params.has('power')) setPower(clamp(getParamNumber('power', power), 0.1, 100));
     if (params.has('hTx')) setHTx(clamp(getParamNumber('hTx', hTx), 0, 300));
     if (params.has('hRx')) setHRx(clamp(getParamNumber('hRx', hRx), 1, 30));
     if (params.has('gain')) setGain(clamp(getParamNumber('gain', gain), 0, 20));
     if (params.has('rxGain')) setRxAntennaGain(clamp(getParamNumber('rxGain', rxAntennaGain), -20, 30));
+    if (params.has('txLoss')) setTxLineLoss(clamp(getParamNumber('txLoss', txLineLoss), 0, 20));
+    if (params.has('rxLoss')) setRxLineLoss(clamp(getParamNumber('rxLoss', rxLineLoss), 0, 20));
+    if (params.has('fade')) setFadeMargin(clamp(getParamNumber('fade', fadeMargin), 0, 40));
     if (params.has('range')) setMaxRangeKm(clamp(getParamNumber('range', maxRangeKm), MIN_PREDICTION_RANGE_KM, MAX_PREDICTION_RANGE_KM));
+    if (params.has('mode') && MODE_PROFILES[params.get('mode')]) {
+      const profile = MODE_PROFILES[params.get('mode')];
+      setModeKey(params.get('mode'));
+      setRequiredSnrDb(profile.defaultRequiredSnr);
+      setRxThresholdUv(Number(dbmToMicrovolts(profile.thresholds.weak).toFixed(3)));
+      setStrongSignalMarginDb(getStrongMarginForModeProfile(profile));
+    }
     if (params.has('threshold')) setRxThresholdUv(clamp(getParamNumber('threshold', rxThresholdUv), 0.01, 1000));
-    if (params.has('mode') && MODE_PROFILES[params.get('mode')]) setModeKey(params.get('mode'));
+    if (params.has('strongMargin')) setStrongSignalMarginDb(clamp(getParamNumber('strongMargin', strongSignalMarginDb), 0, 60));
+    if (params.has('noiseFigure')) setNoiseFigureDb(clamp(getParamNumber('noiseFigure', noiseFigureDb), 0, 30));
+    if (params.has('snr')) setRequiredSnrDb(clamp(getParamNumber('snr', requiredSnrDb), -30, 40));
+    if (params.has('reliability')) setItmReliabilityPercent(clamp(getParamNumber('reliability', itmReliabilityPercent), 1, 99));
+    if (params.has('confidence')) setItmConfidencePercent(clamp(getParamNumber('confidence', itmConfidencePercent), 1, 99));
     if (params.has('model') && PROPAGATION_MODELS[params.get('model')]) setPropagationModel(params.get('model'));
     if (params.has('render') && COVERAGE_RENDER_OPTIONS.some((option) => option.key === params.get('render'))) setCoverageRenderMode(params.get('render'));
+    if (params.has('rasterCell')) {
+      const importedCellKm = getParamNumber('rasterCell', rasterCellKm);
+      if (RASTER_CELL_OPTIONS_KM.includes(importedCellKm)) setRasterCellKm(importedCellKm);
+    }
     if (params.has('radials')) {
       const radialMode = params.get('radials');
       if (COVERAGE_RADIAL_OPTIONS.some((option) => option.key === radialMode)) setCoverageRadialMode(radialMode);
     }
     if (params.has('thresholdMode') && THRESHOLD_MODE_OPTIONS.some((option) => option.key === params.get('thresholdMode'))) setThresholdMode(params.get('thresholdMode'));
+    if (params.has('clutter') && CLUTTER_PROFILES[params.get('clutter')]) setClutterKey(params.get('clutter'));
+    setUseLandCover(getParamBoolean('landCover', useLandCover));
+    setUseTwoRay(getParamBoolean('twoRay', useTwoRay));
+    if (params.has('rain')) setRainRate(clamp(getParamNumber('rain', rainRate), 0, 150));
+    if (params.has('atm')) setAtmosphericLoss(clamp(getParamNumber('atm', atmosphericLoss), 0, 1));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -2343,18 +2384,33 @@ function App() {
       lat: activeSite.position[0].toFixed(6),
       lon: activeSite.position[1].toFixed(6),
       freq: String(freq),
+      band: freqBand,
       power: String(power),
       hTx: String(hTx),
       hRx: String(hRx),
       gain: String(gain),
       rxGain: String(rxAntennaGain),
+      txLoss: String(txLineLoss),
+      rxLoss: String(rxLineLoss),
+      fade: String(fadeMargin),
       range: String(maxRangeKm),
       threshold: String(rxThresholdUv),
+      strongMargin: String(strongSignalMarginDb),
+      noiseFigure: String(noiseFigureDb),
+      snr: String(requiredSnrDb),
       mode: modeKey,
       model: propagationModel,
       render: coverageRenderMode,
       radials: coverageRadialMode,
+      rasterCell: String(rasterCellKm),
       thresholdMode,
+      reliability: String(itmReliabilityPercent),
+      confidence: String(itmConfidencePercent),
+      clutter: clutterKey,
+      landCover: useLandCover ? '1' : '0',
+      twoRay: useTwoRay ? '1' : '0',
+      rain: String(rainRate),
+      atm: String(atmosphericLoss),
     });
     const url = `${window.location.origin}${window.location.pathname}?${params.toString()}`;
     try {
@@ -2363,7 +2419,37 @@ function App() {
     } catch {
       setAnalysisNotice(url);
     }
-  }, [activeSite, coverageRadialMode, coverageRenderMode, freq, gain, hRx, hTx, maxRangeKm, modeKey, power, propagationModel, rxAntennaGain, rxThresholdUv, thresholdMode]);
+  }, [
+    activeSite,
+    atmosphericLoss,
+    clutterKey,
+    coverageRadialMode,
+    coverageRenderMode,
+    fadeMargin,
+    freq,
+    freqBand,
+    gain,
+    hRx,
+    hTx,
+    itmConfidencePercent,
+    itmReliabilityPercent,
+    maxRangeKm,
+    modeKey,
+    noiseFigureDb,
+    power,
+    propagationModel,
+    rainRate,
+    rasterCellKm,
+    requiredSnrDb,
+    rxAntennaGain,
+    rxLineLoss,
+    rxThresholdUv,
+    strongSignalMarginDb,
+    thresholdMode,
+    txLineLoss,
+    useLandCover,
+    useTwoRay,
+  ]);
 
   const applyStationPreset = useCallback((preset) => {
     setPower(preset.power);
@@ -2377,6 +2463,7 @@ function App() {
       setModeKey(preset.modeKey);
       setRequiredSnrDb(profile.defaultRequiredSnr);
       setRxThresholdUv(Number(dbmToMicrovolts(profile.thresholds.weak).toFixed(3)));
+      setStrongSignalMarginDb(getStrongMarginForModeProfile(profile));
     }
     if (preset.freqBand) setFreqBand(preset.freqBand);
     if (preset.freq) setFreq(preset.freq);
@@ -3019,7 +3106,8 @@ function App() {
       weak: calculateAreaKm2(newPolygons.weak),
     };
 
-    if (coverageRenderMode === 'raster' && propagationModel === 'ntiaItmApi' && freq <= ITM_API_MAX_FREQUENCY_MHZ) {
+    const customClutterMapActive = useLandCover && (clutterMap?.features?.length ?? 0) > 0;
+    if (coverageRenderMode === 'raster' && propagationModel === 'ntiaItmApi' && freq <= ITM_API_MAX_FREQUENCY_MHZ && !customClutterMapActive) {
       try {
         const rasterResult = await fetchPerCellRasterCoverage({
           site: { ...site, elevation: siteElevation },
@@ -3515,9 +3603,10 @@ function App() {
                   const nextProfile = MODE_PROFILES[nextMode] ?? MODE_PROFILES.fm;
                   setModeKey(nextMode);
                   setFreq(nextProfile.defaultFreq);
-                  setFreqBand(nextProfile.defaultFreq < 300 ? 'vhf' : nextProfile.defaultFreq < 3000 ? 'uhf' : 'shf');
+                  setFreqBand(getBandKeyForFrequency(nextProfile.defaultFreq));
                   setRequiredSnrDb(nextProfile.defaultRequiredSnr);
                   setRxThresholdUv(Number(dbmToMicrovolts(nextProfile.thresholds.weak).toFixed(3)));
+                  setStrongSignalMarginDb(getStrongMarginForModeProfile(nextProfile));
                   markCoverageStale('Mode profile changed. Run coverage to recalculate.');
                 }}
             >

@@ -100,8 +100,7 @@ Request:
   "profileStepKm": 2,
   "thresholdsDbm": { "strong": -103, "moderate": -108, "weak": -113 },
   "confidence": 50,
-  "reliability": 70,
-  "antenna": { "azimuth": 0, "beamwidth": 360, "frontBackRatio": 0 }
+  "reliability": 70
 }
 ```
 

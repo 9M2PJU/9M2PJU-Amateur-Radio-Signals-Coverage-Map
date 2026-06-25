@@ -87,6 +87,15 @@ const calculateShfRainLoss = (freq, distanceKm, rainRateMmH) => {
   return clamp(k * (rainRateMmH ** alpha) * effectiveDistanceKm, 0, 45);
 };
 
+const calculateAtmosphericLoss = (freq, distanceKm, atmosphericLossDbPerKm) => {
+  if (freq < 3000 || distanceKm <= 0) return 0;
+  const freqGhz = freq / 1000;
+  const oxygenWaterLossDbPerKm = atmosphericLossDbPerKm + (
+    freqGhz > 10 ? (freqGhz - 10) * 0.002 : 0
+  );
+  return clamp(oxygenWaterLossDbPerKm * distanceKm, 0, 20);
+};
+
 const createItmDistanceGrid = (maxRangeKm = MAX_PREDICTION_RANGE_KM) => {
   const cappedRangeKm = Math.max(ITM_API_MIN_DISTANCE_KM, maxRangeKm);
   const distances = new Set([ITM_API_MIN_DISTANCE_KM, cappedRangeKm]);
@@ -208,6 +217,9 @@ for (const freq of [145, 433, 1296, 5600]) {
 assert(calculateShfRainLoss(145, 30, 50) === 0, 'Rain loss must not affect VHF');
 assert(calculateShfRainLoss(10368, 30, 50) > calculateShfRainLoss(5600, 30, 50), 'Rain loss should increase with SHF frequency');
 assert(calculateShfRainLoss(10368, 30, 80) > calculateShfRainLoss(10368, 30, 10), 'Rain loss should increase with rain rate');
+assert(calculateAtmosphericLoss(145, 30, 0.01) === 0, 'Atmospheric loss must not affect VHF');
+assert(calculateAtmosphericLoss(24000, 30, 0.01) > calculateAtmosphericLoss(5600, 30, 0.01), 'Atmospheric loss should increase above 10 GHz');
+assert(calculateAtmosphericLoss(24000, 1000, 0.5) === 20, 'Atmospheric loss should be capped for planning stability');
 
 const itmDistanceGrid = createItmDistanceGrid(100);
 assert(itmDistanceGrid[0] === 1, 'Native ITM distance grid should start at 1 km');

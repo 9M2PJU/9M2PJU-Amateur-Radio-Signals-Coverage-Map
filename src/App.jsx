@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { MapContainer, TileLayer, Marker, useMap, useMapEvents, Popup, Polygon, LayersControl, ZoomControl, CircleMarker } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
-import { Radio, Activity, Layers, Zap, Mountain, BarChart3, Plus, Trash2, Antenna, Info, X, Upload, Download, FileText, Crosshair, MapPin, Database, Share2, Clipboard, Gauge } from 'lucide-react';
+import { Radio, Activity, Layers, Zap, Mountain, BarChart3, Plus, Trash2, Antenna, Info, X, Upload, Download, FileText, Crosshair, MapPin, Share2, Clipboard } from 'lucide-react';
 import L from 'leaflet';
 
 import icon from 'leaflet/dist/images/marker-icon.png';
@@ -15,20 +15,20 @@ const DefaultIcon = L.icon({
 });
 L.Marker.prototype.options.icon = DefaultIcon;
 
-const SITE_COLORS = ['#00a3ff', '#b450ff', '#00b894', '#ff7a45'];
+const SITE_COLORS = ['#38bdf8', '#a78bfa', '#2dd4bf', '#f59e0b'];
 const GRADE_CONFIG = [
-  { key: 'weak', label: 'Fringe', color: '#ff4444', fillOpacity: 0.08, weight: 1, dashArray: '3, 3' },
-  { key: 'moderate', label: 'Moderate', color: '#ffc107', fillOpacity: 0.16, weight: 1 },
-  { key: 'strong', label: 'Strong', color: '#4dbd74', fillOpacity: 0.28, weight: 2 },
+  { key: 'weak', label: 'Fringe', color: '#fb7185', fillOpacity: 0.08, weight: 1, dashArray: '3, 3' },
+  { key: 'moderate', label: 'Moderate', color: '#f7c948', fillOpacity: 0.16, weight: 1 },
+  { key: 'strong', label: 'Strong', color: '#52c878', fillOpacity: 0.28, weight: 2 },
 ];
 const MODE_PROFILES = {
   fm: {
     label: 'FM Voice',
     defaultFreq: 145,
     defaultBandwidth: 12500,
-    defaultRequiredSnr: 12,
-    thresholds: { strong: -93, moderate: -105, weak: -115 },
-    note: 'Analog voice planning thresholds',
+    defaultRequiredSnr: 14,
+    thresholds: { strong: -103.01, moderate: -108.01, weak: -113.01 },
+    note: 'Analog FM planning threshold around 0.5 uV',
   },
   packet: {
     label: 'APRS / Packet',
@@ -133,13 +133,13 @@ const MAP_LAYERS = [
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
   },
 ];
-const APP_VERSION = '4.8.0';
+const APP_VERSION = '4.8.1';
 const EMPTY_AREAS = { strong: 0, moderate: 0, weak: 0 };
 const EMPTY_POLYGONS = { strong: null, moderate: null, weak: null };
 const RADIALS_COUNT = 72;
 const COVERAGE_RADIAL_OPTIONS = [
   { key: 'standard', label: 'Standard 5 deg', radials: RADIALS_COUNT },
-  { key: 'radioMobile', label: 'Radio Mobile validation 2 deg', radials: 180 },
+  { key: 'fine', label: 'Fine 2 deg', radials: 180 },
 ];
 const COVERAGE_RENDER_OPTIONS = [
   { key: 'polygon', label: 'Radial polygons' },
@@ -159,11 +159,6 @@ const QUICK_STATION_PRESETS = [
   { key: 'lora', label: 'LoRa', power: 1, hTx: 8, hRx: 1.5, gain: 3, rxAntennaGain: 2, modeKey: 'loraSf9', fadeMargin: 8 },
   { key: 'microwave', label: 'Microwave', power: 5, hTx: 15, hRx: 10, gain: 20, rxAntennaGain: 20, freqBand: 'shf', freq: 5600, fadeMargin: 12, useTwoRay: true },
 ];
-const SAMPLE_SCENARIOS = [
-  { key: 'flat', label: 'Flat rural', position: [2.0442, 102.5689], freq: 145, hTx: 25, hRx: 2, maxRangeKm: 80, clutterKey: 'open' },
-  { key: 'coastal', label: 'Coastal path', position: [1.4927, 103.7414], freq: 145, hTx: 30, hRx: 10, maxRangeKm: 100, clutterKey: 'open' },
-  { key: 'hilly', label: 'Hilly terrain', position: [3.8126, 101.8570], freq: 145, hTx: 35, hRx: 2, maxRangeKm: 90, clutterKey: 'forest' },
-];
 const CLUTTER_CLASS_LOSS_DB = {
   open: 0,
   rural: 2,
@@ -174,38 +169,6 @@ const CLUTTER_CLASS_LOSS_DB = {
   dense_urban: 24,
   building: 26,
 };
-const EXPERIMENT_IMPROVEMENTS = [
-  'Prediction trust status for every active site',
-  'Noise-floor threshold mode using bandwidth, noise figure, and required SNR',
-  'Adjustable raster cell size for per-cell coverage experiments',
-  'Local DEM CSV/JSON import into the elevation cache',
-  'Radio Mobile reference CSV import for parity scoring',
-  'Bearing-by-bearing Radio Mobile distance error summary',
-  'Map click mode switch between site placement and point query',
-  'Point query popup with predicted signal, grade, bearing, and source engine',
-  'Terrain profile sparkline for queried receiver points',
-  'Quick amateur station presets for handheld, mobile, base, repeater, LoRa, and microwave',
-  'Sample scenarios for flat, coastal, and hilly terrain checks',
-  'Scenario JSON export for repeatable validation',
-  'Scenario JSON import for restoring experiments',
-  'Shareable URL with key RF settings and active site position',
-  'Experiment package JSON with settings, validation, parity, sites, notes, and improvement manifest',
-  'Operator map notes from queried points',
-  'Multi-band max-range margin preview',
-  'Explicit threshold diagnostics in app exports',
-  'PDF map snapshot legend, north arrow, and scale reference',
-  'GeoJSON metadata for threshold mode, raster size, and confidence state',
-  'Validation JSON expanded with threshold model assumptions',
-  'Radio Mobile CSV metadata expanded with raster and threshold mode',
-  'Clutter GeoJSON class-name loss mapping',
-  'DEM-backed local cache clear/refresh behavior through scenario tools',
-  'Debug panel for compact active-site prediction metadata',
-  'Current run explanation in plain operator language',
-  'Confidence badge tied to ITM/native/fallback/raster status',
-  'Visual overlap reduction through compact grouped controls',
-  'Automated experiment smoke test for parser and parity helpers',
-  'Updated README describing current reliability and experiment workflow',
-];
 const SAMPLING_INTERVALS_KM = [
   0.25,
   0.5,
@@ -260,11 +223,6 @@ let elevationCacheWriteTimer = null;
 
 const normalizeCoordinate = (value) => Number(value).toFixed(5);
 const getElevationCacheKey = ([lat, lon]) => `${normalizeCoordinate(lat)},${normalizeCoordinate(lon)}`;
-const escapeCsvCell = (value) => {
-  if (value === null || typeof value === 'undefined') return '';
-  const text = String(value);
-  return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
-};
 const toGeoJsonPolygonRing = (points) => {
   if (!Array.isArray(points) || points.length < 3) return null;
   const ring = points.map(([lat, lon]) => [Number(lon.toFixed(6)), Number(lat.toFixed(6))]);
@@ -538,7 +496,6 @@ const resetSitePrediction = (site, status = 'pending') => ({
   itmRadialLosses: null,
   itmWarningSamples: 0,
   itmErrorSamples: 0,
-  radioMobileRows: [],
   failedChunks: 0,
 });
 
@@ -922,51 +879,6 @@ const captureMapSnapshot = async ({ map, sites, serviceGrades, coverageRenderMod
   }
 };
 
-const normalizeBearingDelta = (bearing, centerBearing) => {
-  const delta = Math.abs(((bearing - centerBearing + 540) % 360) - 180);
-  return delta;
-};
-
-const normalizeRelativeBearing = (bearing, centerBearing) => (
-  ((bearing - centerBearing + 360) % 360)
-);
-
-const calculateAntennaPatternLoss = (bearing, antennaAzimuth, antennaBeamwidth, frontBackRatio) => {
-  if (antennaBeamwidth >= 360 || frontBackRatio <= 0) return 0;
-  const halfBeamwidth = Math.max(1, antennaBeamwidth / 2);
-  const delta = normalizeBearingDelta(bearing, antennaAzimuth);
-  if (delta <= halfBeamwidth) return 0;
-
-  const rearStart = 180 - halfBeamwidth;
-  if (delta >= rearStart) return frontBackRatio;
-  return clamp(((delta - halfBeamwidth) / Math.max(1, rearStart - halfBeamwidth)) * frontBackRatio, 0, frontBackRatio);
-};
-
-const interpolateAntennaPatternLoss = (bearing, antennaPattern) => {
-  if (!antennaPattern?.points?.length) return null;
-  const normalizedBearing = ((bearing % 360) + 360) % 360;
-  const points = antennaPattern.points;
-  const extendedPoints = [...points, { ...points[0], angle: points[0].angle + 360 }];
-
-  for (let index = 1; index < extendedPoints.length; index++) {
-    const previous = extendedPoints[index - 1];
-    const next = extendedPoints[index];
-    const targetBearing = normalizedBearing < points[0].angle ? normalizedBearing + 360 : normalizedBearing;
-    if (targetBearing > next.angle) continue;
-
-    const ratio = (targetBearing - previous.angle) / Math.max(1e-9, next.angle - previous.angle);
-    return previous.lossDb + (next.lossDb - previous.lossDb) * clamp(ratio, 0, 1);
-  }
-
-  return points[points.length - 1].lossDb;
-};
-
-const getAntennaPatternLoss = ({ bearing, antennaAzimuth, antennaBeamwidth, frontBackRatio, antennaPattern }) => {
-  const patternLoss = interpolateAntennaPatternLoss(normalizeRelativeBearing(bearing, antennaAzimuth), antennaPattern);
-  if (typeof patternLoss === 'number') return patternLoss;
-  return calculateAntennaPatternLoss(bearing, antennaAzimuth, antennaBeamwidth, frontBackRatio);
-};
-
 const calculateFreeSpacePathLoss = (freq, distanceKm) => (
   32.44 + 20 * Math.log10(Math.max(0.001, distanceKm)) + 20 * Math.log10(clamp(freq, MIN_FREQUENCY_MHZ, MAX_FREQUENCY_MHZ))
 );
@@ -1080,7 +992,7 @@ const getModelReliability = ({ freq, hTx, hRx, propagationModel, fadeMargin }) =
 
   if (freq < 150) {
     penalty += 16;
-    notes.push('Low VHF uses an extrapolated terrain-aware model; field validation is strongly recommended.');
+    notes.push('Low VHF uses an extrapolated terrain-aware model; real-world signal checks are recommended.');
   } else if (freq <= 1500) {
     notes.push('Best range for the Hata-style outdoor VHF/UHF estimate.');
   } else if (freq <= 2000) {
@@ -1384,8 +1296,8 @@ const findReliableDistance = ({
   return low;
 };
 
-const getPredictedSignalForMeasurement = ({
-  measurement,
+const getPredictedSignalForPoint = ({
+  receiverPoint,
   site,
   terrainProfile,
   modelKey,
@@ -1397,11 +1309,6 @@ const getPredictedSignalForMeasurement = ({
   rxAntennaGain,
   systemLossDb,
   clutterLossDb,
-  calibrationOffsetDb,
-  antennaPattern,
-  antennaAzimuth,
-  antennaBeamwidth,
-  frontBackRatio,
   clutterMap,
   rainRateMmH,
   atmosphericLossDbPerKm,
@@ -1411,14 +1318,12 @@ const getPredictedSignalForMeasurement = ({
 }) => {
   if (!terrainProfile?.radialSampleSets?.length) return null;
 
-  const bearing = calculateBearingDegrees(site.position, measurement.position);
+  const bearing = calculateBearingDegrees(site.position, receiverPoint.position);
   const radialCount = terrainProfile.radialSampleSets.length;
   const radialIndex = Math.round(bearing / (360 / radialCount)) % radialCount;
   const radialSamples = terrainProfile.radialSampleSets[radialIndex] ?? [];
-  const distanceKm = haversineDistanceKm(site.position, measurement.position);
+  const distanceKm = haversineDistanceKm(site.position, receiverPoint.position);
   const effectiveHTx = calculateEffectiveTxHeight(terrainProfile.siteElevation, hTx, radialSamples);
-  const antennaPatternLoss = getAntennaPatternLoss({ bearing, antennaAzimuth, antennaBeamwidth, frontBackRatio, antennaPattern });
-  const directionalGain = txGain - antennaPatternLoss;
   const itmPathLoss = modelKey === 'ntiaItmApi'
     ? getItmApiPathLoss(itmRadialLosses?.[radialIndex], distanceKm)
     : null;
@@ -1454,7 +1359,7 @@ const getPredictedSignalForMeasurement = ({
       atmosphericLossDbPerKm,
       useTwoRay,
     });
-  const estimatedDbm = powerDbm + directionalGain + rxAntennaGain - systemLossDb - pathLoss + calibrationOffsetDb;
+  const estimatedDbm = powerDbm + txGain + rxAntennaGain - systemLossDb - pathLoss;
   const predictedGrade = [...serviceGrades]
     .sort((a, b) => b.thresholdDbm - a.thresholdDbm)
     .find((grade) => estimatedDbm >= grade.thresholdDbm)?.key ?? 'outside';
@@ -1546,10 +1451,6 @@ const fetchPerCellRasterCoverage = async ({
   serviceGrades,
   confidence,
   reliability,
-  antennaAzimuth,
-  antennaBeamwidth,
-  frontBackRatio,
-  antennaPattern,
   rainRateMmH,
   atmosphericLossDbPerKm,
   useTwoRay,
@@ -1589,12 +1490,6 @@ const fetchPerCellRasterCoverage = async ({
       groundPermittivity: 15,
       groundConductivity: 0.005,
       surfaceRefractivity: 301,
-        antenna: {
-          azimuth: antennaAzimuth,
-          beamwidth: antennaBeamwidth,
-          frontBackRatio,
-          patternPoints: antennaPattern?.points ?? [],
-        },
       rainRateMmH,
       atmosphericLossDbPerKm,
       useTwoRay,
@@ -1904,35 +1799,6 @@ const calculateCombinedCoverageAreas = (sites) => ({
   weak: calculateUnionAreaKm2(sites.flatMap((site) => getCoverageGeometryForGrade(site, 'weak'))),
 });
 
-const parseAntennaPatternCsv = (text) => {
-  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  if (lines.length < 2) return null;
-  const headers = lines[0].split(',').map((header) => header.trim().toLowerCase());
-  const angleIndex = headers.findIndex((header) => ['angle', 'azimuth', 'bearing', 'deg', 'degrees'].includes(header));
-  const lossIndex = headers.findIndex((header) => ['loss', 'lossdb', 'attenuation', 'attenuationdb', 'pattern_loss'].includes(header));
-  const gainIndex = headers.findIndex((header) => ['gain', 'gaindb', 'gain_dbi', 'dbi'].includes(header));
-  if (angleIndex < 0 || (lossIndex < 0 && gainIndex < 0)) return null;
-
-  const rawPoints = lines.slice(1).map((line) => {
-    const cells = line.split(',').map((cell) => cell.trim());
-    const angle = Number(cells[angleIndex]);
-    const value = Number(cells[lossIndex >= 0 ? lossIndex : gainIndex]);
-    if (!Number.isFinite(angle) || !Number.isFinite(value)) return null;
-    return { angle: ((angle % 360) + 360) % 360, value };
-  }).filter(Boolean);
-
-  if (rawPoints.length < 2) return null;
-  const maxGain = Math.max(...rawPoints.map((point) => point.value));
-  const points = rawPoints
-    .map((point) => ({
-      angle: point.angle,
-      lossDb: lossIndex >= 0 ? clamp(point.value, 0, 60) : clamp(maxGain - point.value, 0, 60),
-    }))
-    .sort((a, b) => a.angle - b.angle);
-
-  return { points };
-};
-
 const parseClutterGeoJson = (text) => {
   const data = JSON.parse(text);
   const rawFeatures = data.type === 'FeatureCollection'
@@ -1965,213 +1831,6 @@ const parseClutterGeoJson = (text) => {
   }).filter((feature) => feature && ['Polygon', 'MultiPolygon'].includes(feature.geometry?.type));
 
   return features.length ? { features } : null;
-};
-
-const parseLocalDemText = (text) => {
-  const trimmed = text.trim();
-  if (!trimmed) return [];
-
-  try {
-    const data = JSON.parse(trimmed);
-    const rawItems = Array.isArray(data)
-      ? data
-      : data.type === 'FeatureCollection'
-        ? data.features
-        : data.results ?? data.points ?? [];
-    return rawItems.map((item) => {
-      if (item.geometry?.type === 'Point') {
-        const [lon, lat] = item.geometry.coordinates ?? [];
-        return {
-          lat: Number(lat),
-          lon: Number(lon),
-          elevation: Number(item.properties?.elevation ?? item.properties?.elevationM ?? item.properties?.ele),
-        };
-      }
-      return {
-        lat: Number(item.lat ?? item.latitude),
-        lon: Number(item.lon ?? item.lng ?? item.longitude),
-        elevation: Number(item.elevation ?? item.elevationM ?? item.ele),
-      };
-    }).filter(({ lat, lon, elevation }) => [lat, lon, elevation].every(Number.isFinite));
-  } catch {
-    const lines = trimmed.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-    if (lines.length < 2) return [];
-    const headers = lines[0].split(',').map((header) => header.trim().toLowerCase());
-    const latIndex = headers.findIndex((header) => ['lat', 'latitude'].includes(header));
-    const lonIndex = headers.findIndex((header) => ['lon', 'lng', 'longitude'].includes(header));
-    const elevationIndex = headers.findIndex((header) => ['elevation', 'elevationm', 'ele', 'height'].includes(header));
-    if (latIndex < 0 || lonIndex < 0 || elevationIndex < 0) return [];
-    return lines.slice(1).map((line) => {
-      const cells = line.split(',').map((cell) => cell.trim());
-      return {
-        lat: Number(cells[latIndex]),
-        lon: Number(cells[lonIndex]),
-        elevation: Number(cells[elevationIndex]),
-      };
-    }).filter(({ lat, lon, elevation }) => [lat, lon, elevation].every(Number.isFinite));
-  }
-};
-
-const parseRadioMobileComparisonCsv = (text) => {
-  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  if (lines.length < 2) return [];
-  const headers = lines[0].split(',').map((header) => header.trim().toLowerCase());
-  const findHeader = (names) => headers.findIndex((header) => names.includes(header));
-  const bearingIndex = findHeader(['bearing', 'bearingdeg', 'azimuth', 'azimuthdeg', 'deg']);
-  const strongIndex = findHeader(['strong', 'strongkm', 'strongreachkm', 'strong_distance_km']);
-  const moderateIndex = findHeader(['moderate', 'moderatekm', 'moderatereachkm', 'moderate_distance_km']);
-  const weakIndex = findHeader(['fringe', 'fringekm', 'fringereachkm', 'weak', 'weakkm', 'weakreachkm', 'distancekm']);
-  if (bearingIndex < 0 || weakIndex < 0) return [];
-
-  return lines.slice(1).map((line) => {
-    const cells = line.split(',').map((cell) => cell.trim());
-    const bearingDeg = Number(cells[bearingIndex]);
-    const weakReachKm = Number(cells[weakIndex]);
-    if (!Number.isFinite(bearingDeg) || !Number.isFinite(weakReachKm)) return null;
-    return {
-      bearingDeg: ((bearingDeg % 360) + 360) % 360,
-      strongReachKm: Number(cells[strongIndex]),
-      moderateReachKm: Number(cells[moderateIndex]),
-      weakReachKm,
-    };
-  }).filter(Boolean);
-};
-
-const parseCsvMeasurements = (text) => {
-  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  if (lines.length < 2) return [];
-  const headers = lines[0].split(',').map((header) => header.trim().toLowerCase());
-  const latIndex = headers.findIndex((header) => ['lat', 'latitude'].includes(header));
-  const lonIndex = headers.findIndex((header) => ['lon', 'lng', 'longitude'].includes(header));
-  const signalIndex = headers.findIndex((header) => ['rssi', 'signal', 'signal_dbm', 'dbm', 'rx_dbm'].includes(header));
-  if (latIndex < 0 || lonIndex < 0 || signalIndex < 0) return [];
-
-  return lines.slice(1).map((line, index) => {
-    const cells = line.split(',').map((cell) => cell.trim());
-    const lat = Number(cells[latIndex]);
-    const lon = Number(cells[lonIndex]);
-    const measuredDbm = Number(cells[signalIndex]);
-    if (![lat, lon, measuredDbm].every(Number.isFinite)) return null;
-    return {
-      id: `csv-${index}-${lat}-${lon}`,
-      source: 'CSV',
-      position: [lat, lon],
-      measuredDbm,
-    };
-  }).filter(Boolean);
-};
-
-const parseGpxMeasurements = (text) => {
-  const doc = new DOMParser().parseFromString(text, 'application/xml');
-  const parserError = doc.querySelector('parsererror');
-  if (parserError) return [];
-  const points = Array.from(doc.querySelectorAll('trkpt, wpt'));
-
-  return points.map((point, index) => {
-    const lat = Number(point.getAttribute('lat'));
-    const lon = Number(point.getAttribute('lon'));
-    const signalNode = Array.from(point.querySelectorAll('*')).find((node) => (
-      ['rssi', 'signal', 'signal_dbm', 'dbm', 'rx_dbm'].includes(node.localName.toLowerCase())
-    ));
-    const measuredDbm = Number(signalNode?.textContent);
-    if (![lat, lon, measuredDbm].every(Number.isFinite)) return null;
-    return {
-      id: `gpx-${index}-${lat}-${lon}`,
-      source: 'GPX',
-      position: [lat, lon],
-      measuredDbm,
-    };
-  }).filter(Boolean);
-};
-
-const summarizeErrors = (comparisons) => {
-  const valid = comparisons.filter((item) => Number.isFinite(item.errorDb));
-  if (!valid.length) {
-    return { count: 0, meanError: 0, rmse: 0, medianAbsError: 0, within6Db: 0, within10Db: 0 };
-  }
-
-  const errors = valid.map((item) => item.errorDb);
-  const absErrors = errors.map(Math.abs).sort((a, b) => a - b);
-  const meanError = errors.reduce((total, error) => total + error, 0) / errors.length;
-  const rmse = Math.sqrt(errors.reduce((total, error) => total + error ** 2, 0) / errors.length);
-  const medianAbsError = absErrors[Math.floor(absErrors.length / 2)];
-
-  return {
-    count: valid.length,
-    meanError,
-    rmse,
-    medianAbsError,
-    within6Db: valid.filter((item) => Math.abs(item.errorDb) <= 6).length / valid.length * 100,
-    within10Db: valid.filter((item) => Math.abs(item.errorDb) <= 10).length / valid.length * 100,
-  };
-};
-
-const summarizeNumericErrors = (errors, withinTolerances = [3, 5, 10]) => {
-  const valid = errors.filter(Number.isFinite);
-  if (!valid.length) {
-    return {
-      count: 0,
-      meanError: 0,
-      mae: 0,
-      rmse: 0,
-      maxAbs: 0,
-      within: withinTolerances.reduce((acc, tolerance) => ({ ...acc, [tolerance]: 0 }), {}),
-    };
-  }
-
-  const absErrors = valid.map(Math.abs);
-  const meanError = valid.reduce((total, error) => total + error, 0) / valid.length;
-  return {
-    count: valid.length,
-    meanError,
-    mae: absErrors.reduce((total, error) => total + error, 0) / absErrors.length,
-    rmse: Math.sqrt(valid.reduce((total, error) => total + error ** 2, 0) / valid.length),
-    maxAbs: Math.max(...absErrors),
-    within: withinTolerances.reduce((acc, tolerance) => ({
-      ...acc,
-      [tolerance]: valid.filter((error) => Math.abs(error) <= tolerance).length / valid.length * 100,
-    }), {}),
-  };
-};
-
-const findNearestBearingRow = (rows, bearingDeg) => {
-  if (!rows?.length) return null;
-  return rows.reduce((best, row) => {
-    const diff = normalizeBearingDelta(row.bearingDeg, bearingDeg);
-    return !best || diff < best.diff ? { row, diff } : best;
-  }, null);
-};
-
-const createRadioMobileComparisonReport = (referenceRows, sites) => {
-  const appRows = sites.flatMap((site) => site.radioMobileRows ?? []);
-  if (!referenceRows?.length || !appRows.length) return null;
-  const rows = [];
-
-  referenceRows.forEach((referenceRow) => {
-    const match = findNearestBearingRow(appRows, referenceRow.bearingDeg);
-    if (!match || match.diff > 1.1) return;
-    rows.push({
-      bearingDeg: referenceRow.bearingDeg,
-      bearingDeltaDeg: match.diff,
-      strongErrorKm: Number.isFinite(referenceRow.strongReachKm) && Number.isFinite(match.row.strongReachKm)
-        ? match.row.strongReachKm - referenceRow.strongReachKm
-        : null,
-      moderateErrorKm: Number.isFinite(referenceRow.moderateReachKm) && Number.isFinite(match.row.moderateReachKm)
-        ? match.row.moderateReachKm - referenceRow.moderateReachKm
-        : null,
-      fringeErrorKm: match.row.weakReachKm - referenceRow.weakReachKm,
-    });
-  });
-
-  return {
-    generatedAt: new Date().toISOString(),
-    referenceRows: referenceRows.length,
-    matchedRows: rows.length,
-    strong: summarizeNumericErrors(rows.map((row) => row.strongErrorKm)),
-    moderate: summarizeNumericErrors(rows.map((row) => row.moderateErrorKm)),
-    fringe: summarizeNumericErrors(rows.map((row) => row.fringeErrorKm)),
-    rows,
-  };
 };
 
 const getSiteTrustProfile = (site) => {
@@ -2224,15 +1883,10 @@ const createTerrainSparklinePoints = (samples, width = 250, height = 54) => {
   }).join(' ');
 };
 
-const formatDb = (value, digits = 1) => (
-  Number.isFinite(value) ? `${value.toFixed(digits)} dB` : 'n/a'
-);
-
 const buildScenarioPayload = ({
   sites,
   activeSiteId,
   settings,
-  measurements,
   mapNotes,
 }) => ({
   app: '9M2PJU Coverage Prediction',
@@ -2247,7 +1901,6 @@ const buildScenarioPayload = ({
     color: site.color,
     elevation: site.elevation,
   })),
-  measurements,
   mapNotes,
 });
 
@@ -2302,22 +1955,10 @@ function App() {
   const [rasterCellKm, setRasterCellKm] = useState(COVERAGE_RASTER_CELL_KM);
   const [useLandCover, setUseLandCover] = useState(false);
   const [useTwoRay, setUseTwoRay] = useState(false);
-  const [antennaAzimuth, setAntennaAzimuth] = useState(0);
-  const [antennaBeamwidth, setAntennaBeamwidth] = useState(360);
-  const [frontBackRatio, setFrontBackRatio] = useState(0);
-  const [antennaPattern, setAntennaPattern] = useState(null);
-  const [patternNotice, setPatternNotice] = useState('Optional: import antenna pattern CSV with relative angle/lossDb or relative angle/gain_dBi.');
   const [clutterMap, setClutterMap] = useState(null);
   const [clutterMapNotice, setClutterMapNotice] = useState('Optional: import GeoJSON polygons with lossDb properties.');
-  const [localDemNotice, setLocalDemNotice] = useState('Optional: import local DEM CSV/JSON with lat, lon, elevation.');
-  const [radioMobileReferenceRows, setRadioMobileReferenceRows] = useState([]);
-  const [radioMobileNotice, setRadioMobileNotice] = useState('Optional: import Radio Mobile bearing CSV for parity scoring.');
   const [rainRate, setRainRate] = useState(DEFAULT_SHF_RAIN_RATE_MM_H);
   const [atmosphericLoss, setAtmosphericLoss] = useState(DEFAULT_ATMOSPHERIC_LOSS_DB_PER_KM);
-  const [calibrationOffset, setCalibrationOffset] = useState(0);
-  const [calibrationEnabled, setCalibrationEnabled] = useState(false);
-  const [measurements, setMeasurements] = useState([]);
-  const [measurementNotice, setMeasurementNotice] = useState('Import CSV or GPX measurements for validation.');
   const [mapToolMode, setMapToolMode] = useState('place');
   const [queryPoint, setQueryPoint] = useState(null);
   const [mapNotes, setMapNotes] = useState([]);
@@ -2367,10 +2008,6 @@ function App() {
   const combinedAreas = useMemo(() => calculateCombinedCoverageAreas(sites), [sites]);
   const activeSiteTrust = useMemo(() => getSiteTrustProfile(activeSite), [activeSite]);
   const activeSiteExplanation = useMemo(() => getSiteResultExplanation(activeSite), [activeSite]);
-  const radioMobileComparisonReport = useMemo(
-    () => createRadioMobileComparisonReport(radioMobileReferenceRows, sites),
-    [radioMobileReferenceRows, sites],
-  );
 
   const analyzedSites = sites.filter(siteHasUsableCoverage).length;
   const systemLossDb = txLineLoss + rxLineLoss + fadeMargin;
@@ -2386,7 +2023,6 @@ function App() {
     35,
     95,
   );
-  const activeCalibrationOffset = calibrationEnabled ? calibrationOffset : 0;
   const scenarioSettings = useMemo(() => ({
     power,
     freq,
@@ -2413,15 +2049,10 @@ function App() {
     coverageRadialMode,
     coverageRenderMode,
     rasterCellKm,
-    antennaAzimuth,
-    antennaBeamwidth,
-    frontBackRatio,
     freqBand,
     rainRate,
     atmosphericLoss,
   }), [
-    antennaAzimuth,
-    antennaBeamwidth,
     atmosphericLoss,
     clutterKey,
     coverageRadialMode,
@@ -2429,7 +2060,6 @@ function App() {
     fadeMargin,
     freq,
     freqBand,
-    frontBackRatio,
     gain,
     hRx,
     hTx,
@@ -2452,15 +2082,6 @@ function App() {
     useLandCover,
     useTwoRay,
   ]);
-  const multiBandPreview = useMemo(() => BAND_OPTIONS.map((band) => {
-    const lossDb = calculatePathLoss(band.defaultFreq, Math.max(hTx, activeSite?.haat ?? hTx), hRx, maxRangeKm);
-    const marginDb = powerDbm + gain + rxAntennaGain - systemLossDb - lossDb - fringeThresholdDbm;
-    return {
-      ...band,
-      lossDb,
-      marginDb,
-    };
-  }), [activeSite?.haat, fringeThresholdDbm, gain, hRx, hTx, maxRangeKm, powerDbm, rxAntennaGain, systemLossDb]);
   const isStationPresetActive = useCallback((preset) => (
     Math.abs(power - preset.power) < 0.001 &&
     Math.abs(hTx - preset.hTx) < 0.001 &&
@@ -2473,183 +2094,6 @@ function App() {
     (!preset.freq || Math.abs(freq - preset.freq) < 0.001) &&
     (typeof preset.useTwoRay !== 'boolean' || useTwoRay === preset.useTwoRay)
   ), [fadeMargin, freq, freqBand, gain, hRx, hTx, modeKey, power, rxAntennaGain, useTwoRay]);
-  const isSampleScenarioActive = useCallback((scenario) => (
-    activeSite &&
-    Math.abs(activeSite.position[0] - scenario.position[0]) < 0.0001 &&
-    Math.abs(activeSite.position[1] - scenario.position[1]) < 0.0001 &&
-    Math.abs(freq - scenario.freq) < 0.001 &&
-    Math.abs(hTx - scenario.hTx) < 0.001 &&
-    Math.abs(hRx - scenario.hRx) < 0.001 &&
-    Math.abs(maxRangeKm - scenario.maxRangeKm) < 0.001 &&
-    clutterKey === scenario.clutterKey
-  ), [activeSite, clutterKey, freq, hRx, hTx, maxRangeKm]);
-  const validationReport = useMemo(() => {
-    const comparisons = measurements.map((measurement) => {
-      let bestMatch = null;
-
-      sites.forEach((site) => {
-        const terrainProfile = terrainProfileCacheRef.current.get(getTerrainProfileCacheKey(site.position, site.coverageRadials ?? activeRadialCount));
-        const predictedSignal = getPredictedSignalForMeasurement({
-          measurement,
-          site,
-          terrainProfile,
-          modelKey: propagationModel,
-          freq,
-          hTx,
-          hRx,
-          powerDbm,
-          txGain: gain,
-          rxAntennaGain,
-          systemLossDb,
-          clutterLossDb: activeClutterLossDb,
-          calibrationOffsetDb: activeCalibrationOffset,
-          antennaPattern,
-          antennaAzimuth,
-          antennaBeamwidth,
-          frontBackRatio,
-          clutterMap: useLandCover ? clutterMap : null,
-          rainRateMmH: rainRate,
-          atmosphericLossDbPerKm: atmosphericLoss,
-          serviceGrades,
-          itmRadialLosses: site.itmRadialLosses,
-          useTwoRay,
-        });
-
-        if (predictedSignal) {
-          if (!bestMatch || predictedSignal.estimatedDbm > bestMatch.estimatedDbm) {
-            bestMatch = predictedSignal;
-          }
-          return;
-        }
-
-        const gradeKey = ['strong', 'moderate', 'weak'].find((key) => pointInPolygon(measurement.position, site.coveragePolygons[key]));
-        if (gradeKey && !bestMatch) {
-          const distanceKm = haversineDistanceKm(site.position, measurement.position);
-          bestMatch = {
-            siteId: site.id,
-            siteName: site.name,
-            gradeKey,
-            distanceKm,
-            estimatedDbm: serviceGrades.find((grade) => grade.key === gradeKey)?.thresholdDbm ?? fringeThresholdDbm,
-          };
-        }
-      });
-
-      const estimatedDbm = bestMatch?.estimatedDbm ?? fringeThresholdDbm - 12;
-      return {
-        ...measurement,
-        predictedGrade: bestMatch?.gradeKey ?? 'outside',
-        predictedSite: bestMatch?.siteName ?? 'No analyzed site',
-        predictionEngine: bestMatch?.predictionEngine ?? 'polygon-threshold',
-        estimatedDbm,
-        distanceKm: bestMatch?.distanceKm,
-        bearing: bestMatch?.bearing,
-        errorDb: measurement.measuredDbm - estimatedDbm,
-      };
-    });
-
-    return {
-      generatedAt: new Date().toISOString(),
-      model: PROPAGATION_MODELS[propagationModel]?.label ?? propagationModel,
-      clutter: CLUTTER_PROFILES[clutterKey]?.label ?? clutterKey,
-      assumptions: {
-        propagationModel,
-        clutterKey,
-        useLandCover,
-        useTwoRay,
-        txLineLoss,
-        rxLineLoss,
-        rxAntennaGain,
-        rxThresholdUv,
-        receiverThresholdDbm,
-        thresholdMode,
-        noiseFloorDbm,
-        noiseFigureDb,
-        requiredSnrDb,
-        fadeMargin,
-        fringeThresholdDbm,
-        strongSignalMarginDb,
-        maxRangeKm,
-        itmReliabilityPercent,
-        itmConfidencePercent,
-        antennaAzimuth,
-        antennaBeamwidth,
-        frontBackRatio,
-        confidenceScore,
-        reliability: modelReliability.label,
-        reliabilityNotes: modelReliability.notes,
-        itmApiUrl: propagationModel === 'ntiaItmApi' ? ITM_API_URL : null,
-        itmApiStatus: propagationModel === 'ntiaItmApi' ? itmApiStatus : null,
-        calibrationEnabled,
-        calibrationOffsetDb: activeCalibrationOffset,
-        antennaPatternPoints: antennaPattern?.points?.length ?? 0,
-        clutterMapFeatures: clutterMap?.features?.length ?? 0,
-        rainRateMmH: rainRate,
-        atmosphericLossDbPerKm: atmosphericLoss,
-        radialCount: activeRadialCount,
-        renderMode: coverageRenderMode,
-        rasterCellKm: coverageRenderMode === 'raster' ? rasterCellKm : null,
-        terrainSamplesPerRadial: SAMPLING_INTERVALS_KM.length,
-        terrainMaxDistanceKm: maxRangeKm,
-        sites: sites.map((site) => ({
-          id: site.id,
-          name: site.name,
-          model: site.model,
-          status: site.status,
-          itmWarningSamples: site.itmWarningSamples ?? 0,
-          itmErrorSamples: site.itmErrorSamples ?? 0,
-        })),
-      },
-      summary: summarizeErrors(comparisons),
-      comparisons,
-    };
-  }, [
-    antennaAzimuth,
-    antennaBeamwidth,
-    activeCalibrationOffset,
-    activeRadialCount,
-    antennaPattern,
-    atmosphericLoss,
-    activeClutterLossDb,
-    calibrationEnabled,
-    clutterMap,
-    clutterKey,
-    confidenceScore,
-    coverageRenderMode,
-    fadeMargin,
-    fringeThresholdDbm,
-    frontBackRatio,
-    freq,
-    gain,
-    hRx,
-    hTx,
-    itmConfidencePercent,
-    itmReliabilityPercent,
-    maxRangeKm,
-    measurements,
-    modelReliability.label,
-    modelReliability.notes,
-    noiseFigureDb,
-    noiseFloorDbm,
-    itmApiStatus,
-    powerDbm,
-    propagationModel,
-    rainRate,
-    rasterCellKm,
-    receiverThresholdDbm,
-    requiredSnrDb,
-    rxAntennaGain,
-    rxLineLoss,
-    rxThresholdUv,
-    serviceGrades,
-    sites,
-    strongSignalMarginDb,
-    systemLossDb,
-    thresholdMode,
-    txLineLoss,
-    useLandCover,
-    useTwoRay,
-  ]);
 
   useEffect(() => {
     sitesRef.current = sites;
@@ -2701,7 +2145,10 @@ function App() {
     if (params.has('mode') && MODE_PROFILES[params.get('mode')]) setModeKey(params.get('mode'));
     if (params.has('model') && PROPAGATION_MODELS[params.get('model')]) setPropagationModel(params.get('model'));
     if (params.has('render') && COVERAGE_RENDER_OPTIONS.some((option) => option.key === params.get('render'))) setCoverageRenderMode(params.get('render'));
-    if (params.has('radials') && COVERAGE_RADIAL_OPTIONS.some((option) => option.key === params.get('radials'))) setCoverageRadialMode(params.get('radials'));
+    if (params.has('radials')) {
+      const radialMode = params.get('radials');
+      if (COVERAGE_RADIAL_OPTIONS.some((option) => option.key === radialMode)) setCoverageRadialMode(radialMode);
+    }
     if (params.has('thresholdMode') && THRESHOLD_MODE_OPTIONS.some((option) => option.key === params.get('thresholdMode'))) setThresholdMode(params.get('thresholdMode'));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -2804,48 +2251,6 @@ function App() {
     });
   }, [activeSiteId, sites.length]);
 
-  const importMeasurements = useCallback(async (event) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    try {
-      const text = await file.text();
-      const parsed = file.name.toLowerCase().endsWith('.gpx')
-        ? parseGpxMeasurements(text)
-        : parseCsvMeasurements(text);
-
-      setMeasurements(parsed);
-      setMeasurementNotice(parsed.length
-        ? `Imported ${parsed.length} measurement${parsed.length > 1 ? 's' : ''} from ${file.name}.`
-        : 'No usable measurements found. CSV needs lat, lon, and rssi/signal_dbm columns.');
-    } catch (error) {
-      setMeasurementNotice(`Measurement import failed: ${error.message}`);
-    } finally {
-      event.target.value = '';
-    }
-  }, []);
-
-  const importAntennaPattern = useCallback(async (event) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    try {
-      const parsed = parseAntennaPatternCsv(await file.text());
-      if (!parsed) {
-        setPatternNotice('Pattern import failed. CSV needs relative angle plus lossDb or gain_dBi columns.');
-        return;
-      }
-
-        setAntennaPattern(parsed);
-        setPatternNotice(`Imported ${parsed.points.length} antenna pattern points from ${file.name}; angles are relative to antenna azimuth.`);
-        markCoverageStale('Antenna pattern changed. Run coverage to recalculate.');
-      } catch (error) {
-        setPatternNotice(`Pattern import failed: ${error.message}`);
-      } finally {
-        event.target.value = '';
-      }
-    }, [markCoverageStale]);
-
   const importClutterMap = useCallback(async (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -2867,61 +2272,16 @@ function App() {
       }
     }, [markCoverageStale]);
 
-  const importLocalDem = useCallback(async (event) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    try {
-      const rows = parseLocalDemText(await file.text());
-      if (!rows.length) {
-        setLocalDemNotice('DEM import failed. Use CSV/JSON with lat, lon, and elevation values.');
-        return;
-      }
-
-      rows.forEach((row) => {
-        elevationCache.set(getElevationCacheKey([row.lat, row.lon]), row.elevation);
-      });
-        persistElevationCache();
-        terrainProfileCacheRef.current.clear();
-        const notice = 'Local DEM cache updated. Run coverage again to use it.';
-        setLocalDemNotice(`Imported ${rows.length} DEM elevation point${rows.length > 1 ? 's' : ''} from ${file.name}.`);
-        markCoverageStale(notice);
-        setAnalysisNotice(notice);
-      } catch (error) {
-        setLocalDemNotice(`DEM import failed: ${error.message}`);
-      } finally {
-        event.target.value = '';
-      }
-    }, [markCoverageStale]);
-
-  const importRadioMobileReference = useCallback(async (event) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    try {
-      const rows = parseRadioMobileComparisonCsv(await file.text());
-      setRadioMobileReferenceRows(rows);
-      setRadioMobileNotice(rows.length
-        ? `Imported ${rows.length} Radio Mobile reference bearing${rows.length > 1 ? 's' : ''} from ${file.name}.`
-        : 'Radio Mobile CSV needs bearing plus fringe/weak distance columns.');
-    } catch (error) {
-      setRadioMobileNotice(`Radio Mobile import failed: ${error.message}`);
-    } finally {
-      event.target.value = '';
-    }
-  }, []);
-
   const exportScenario = useCallback(() => {
     const scenario = buildScenarioPayload({
       sites,
       activeSiteId,
       settings: scenarioSettings,
-      measurements,
       mapNotes,
     });
     const blob = new Blob([JSON.stringify(scenario, null, 2)], { type: 'application/json' });
-    downloadBlob(blob, `9m2pju-scenario-${new Date().toISOString().slice(0, 10)}.json`);
-  }, [activeSiteId, mapNotes, measurements, scenarioSettings, sites]);
+    downloadBlob(blob, `9m2pju-coverage-setup-${new Date().toISOString().slice(0, 10)}.json`);
+  }, [activeSiteId, mapNotes, scenarioSettings, sites]);
 
   const importScenario = useCallback(async (event) => {
     const file = event.target.files?.[0];
@@ -2961,17 +2321,17 @@ function App() {
       if (MODE_PROFILES[settings.modeKey]) setModeKey(settings.modeKey);
       if (PROPAGATION_MODELS[settings.propagationModel]) setPropagationModel(settings.propagationModel);
       if (CLUTTER_PROFILES[settings.clutterKey]) setClutterKey(settings.clutterKey);
-      if (COVERAGE_RADIAL_OPTIONS.some((option) => option.key === settings.coverageRadialMode)) setCoverageRadialMode(settings.coverageRadialMode);
+      const importedRadialMode = settings.coverageRadialMode;
+      if (COVERAGE_RADIAL_OPTIONS.some((option) => option.key === importedRadialMode)) setCoverageRadialMode(importedRadialMode);
       if (COVERAGE_RENDER_OPTIONS.some((option) => option.key === settings.coverageRenderMode)) setCoverageRenderMode(settings.coverageRenderMode);
       if (THRESHOLD_MODE_OPTIONS.some((option) => option.key === settings.thresholdMode)) setThresholdMode(settings.thresholdMode);
       if (BAND_OPTIONS.some((option) => option.key === settings.freqBand)) setFreqBand(settings.freqBand);
       setUseLandCover(Boolean(settings.useLandCover));
       setUseTwoRay(Boolean(settings.useTwoRay));
-      if (Array.isArray(scenario.measurements)) setMeasurements(scenario.measurements);
       if (Array.isArray(scenario.mapNotes)) setMapNotes(scenario.mapNotes);
-      setAnalysisNotice(`Scenario imported from ${file.name}. Run coverage to recalculate.`);
+      setAnalysisNotice(`Setup loaded from ${file.name}. Run coverage to recalculate.`);
     } catch (error) {
-      setAnalysisNotice(`Scenario import failed: ${error.message}`);
+      setAnalysisNotice(`Setup load failed: ${error.message}`);
     } finally {
       event.target.value = '';
     }
@@ -3005,28 +2365,6 @@ function App() {
     }
   }, [activeSite, coverageRadialMode, coverageRenderMode, freq, gain, hRx, hTx, maxRangeKm, modeKey, power, propagationModel, rxAntennaGain, rxThresholdUv, thresholdMode]);
 
-  const downloadExperimentPackage = useCallback(() => {
-    const payload = {
-      exportedAt: new Date().toISOString(),
-      appVersion: APP_VERSION,
-      improvements: EXPERIMENT_IMPROVEMENTS,
-      scenario: buildScenarioPayload({
-        sites,
-        activeSiteId,
-        settings: scenarioSettings,
-        measurements,
-        mapNotes,
-      }),
-      validationReport,
-      radioMobileComparisonReport,
-      activeSiteTrust,
-      activeSiteExplanation,
-      queryPoint,
-    };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-    downloadBlob(blob, `9m2pju-experiment-package-${new Date().toISOString().slice(0, 10)}.json`);
-  }, [activeSiteExplanation, activeSiteId, activeSiteTrust, mapNotes, measurements, queryPoint, radioMobileComparisonReport, scenarioSettings, sites, validationReport]);
-
   const applyStationPreset = useCallback((preset) => {
     setPower(preset.power);
     setHTx(preset.hTx);
@@ -3048,36 +2386,14 @@ function App() {
     setAnalysisNotice(notice);
   }, [markCoverageStale]);
 
-  const applySampleScenario = useCallback((scenario) => {
-    setSites((currentSites) => currentSites.map((site) => (
-      resetSitePrediction(
-        site.id === activeSiteId
-          ? {
-            ...site,
-            position: scenario.position,
-          }
-          : site,
-      )
-    )));
-    predictionRevisionRef.current += 1;
-    setFreq(scenario.freq);
-    setFreqBand(scenario.freq < 300 ? 'vhf' : scenario.freq < 3000 ? 'uhf' : 'shf');
-    setHTx(scenario.hTx);
-    setHRx(scenario.hRx);
-    setMaxRangeKm(scenario.maxRangeKm);
-    setClutterKey(scenario.clutterKey);
-    setUseLandCover(scenario.clutterKey !== 'open');
-    setAnalysisNotice(`${scenario.label} sample loaded. Run coverage to compare terrain behavior.`);
-  }, [activeSiteId]);
-
   const calculatePointQuery = useCallback((position) => {
     let bestSignal = null;
     let bestTerrainSamples = [];
 
     sites.forEach((site) => {
       const terrainProfile = terrainProfileCacheRef.current.get(getTerrainProfileCacheKey(site.position, site.coverageRadials ?? activeRadialCount));
-      const predictedSignal = getPredictedSignalForMeasurement({
-        measurement: { position, measuredDbm: 0 },
+      const predictedSignal = getPredictedSignalForPoint({
+        receiverPoint: { position },
         site,
         terrainProfile,
         modelKey: propagationModel,
@@ -3089,11 +2405,6 @@ function App() {
         rxAntennaGain,
         systemLossDb,
         clutterLossDb: activeClutterLossDb,
-        calibrationOffsetDb: activeCalibrationOffset,
-        antennaPattern,
-        antennaAzimuth,
-        antennaBeamwidth,
-        frontBackRatio,
         clutterMap: useLandCover ? clutterMap : null,
         rainRateMmH: rainRate,
         atmosphericLossDbPerKm: atmosphericLoss,
@@ -3134,17 +2445,12 @@ function App() {
       createdAt: new Date().toISOString(),
     };
   }, [
-    activeCalibrationOffset,
     activeClutterLossDb,
     activeRadialCount,
-    antennaAzimuth,
-    antennaBeamwidth,
-    antennaPattern,
     atmosphericLoss,
     clutterMap,
     freq,
     fringeThresholdDbm,
-    frontBackRatio,
     gain,
     hRx,
     hTx,
@@ -3180,32 +2486,6 @@ function App() {
     ]);
     setAnalysisNotice('Map note saved from the current query point.');
   }, [queryPoint]);
-
-  const applyMeasurementCalibration = useCallback(() => {
-    const { count, meanError } = validationReport.summary;
-    if (count < 3) {
-      setMeasurementNotice('Need at least 3 matched measurements before applying calibration.');
-      return;
-    }
-
-    const nextOffset = clamp(meanError, -20, 20);
-    setCalibrationOffset(nextOffset);
-    setCalibrationEnabled(true);
-    setMeasurementNotice(`Applied local calibration offset ${nextOffset.toFixed(1)} dB from ${count} measurements.`);
-    markCoverageStale('Local calibration changed. Run coverage to recalculate.');
-  }, [markCoverageStale, validationReport.summary]);
-
-  const downloadValidationReport = useCallback(() => {
-    const blob = new Blob([JSON.stringify(validationReport, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `9m2pju-validation-report-${new Date().toISOString().slice(0, 10)}.json`;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(url);
-  }, [validationReport]);
 
   const exportCoverageResult = useCallback(() => {
     const analyzedCoverageSites = sites.filter(siteHasUsableCoverage);
@@ -3251,10 +2531,6 @@ function App() {
       coverageRadials: activeRadialCount,
       coverageRenderMode,
       rasterCellKm: coverageRenderMode === 'raster' ? rasterCellKm : null,
-      antennaAzimuth,
-      antennaBeamwidth,
-      frontBackRatio,
-      antennaPatternPoints: antennaPattern?.points?.length ?? 0,
       rainRateMmH: freqBand === 'shf' ? rainRate : null,
       atmosphericLossDbPerKm: freqBand === 'shf' ? atmosphericLoss : null,
     };
@@ -3381,9 +2657,6 @@ function App() {
     downloadBlob(blob, `9m2pju-coverage-result-${new Date().toISOString().slice(0, 10)}.geojson`);
   }, [
     activeRadialCount,
-    antennaAzimuth,
-    antennaBeamwidth,
-    antennaPattern,
     atmosphericLoss,
     clutterKey,
     combinedAreas,
@@ -3393,7 +2666,6 @@ function App() {
     freq,
     freqBand,
     fringeThresholdDbm,
-    frontBackRatio,
     gain,
     hRx,
     hTx,
@@ -3475,10 +2747,6 @@ function App() {
           `Render mode: ${coverageRenderMode}${coverageRenderMode === 'raster' ? ` (${rasterCellKm} km cells)` : ''}`,
           `Land cover: ${useLandCover ? CLUTTER_PROFILES[clutterKey]?.label ?? clutterKey : 'off'}`,
           `Two-ray loss: ${useTwoRay ? 'on' : 'off'}`,
-          `Antenna azimuth: ${antennaAzimuth} deg`,
-          `Antenna beamwidth: ${antennaBeamwidth} deg`,
-          `Front/back ratio: ${frontBackRatio} dB`,
-          `Imported antenna pattern points: ${antennaPattern?.points?.length ?? 0}`,
           ...(freqBand === 'shf' ? [
             `Rain rate: ${rainRate} mm/h`,
             `Atmospheric loss: ${atmosphericLoss} dB/km`,
@@ -3491,7 +2759,7 @@ function App() {
           `${site.name}: ${site.position[0].toFixed(6)}, ${site.position[1].toFixed(6)}`,
           `  Elevation: ${site.elevation} m AMSL, HAAT: ${(site.haat ?? 0).toFixed(1)} m, confidence: ${site.confidence?.toFixed?.(0) ?? site.confidence}%`,
           `  Strong: ${formatArea(site.areas?.strong)}, Moderate: ${formatArea(site.areas?.moderate)}, Fringe: ${formatArea(site.areas?.weak)}`,
-          `  Render source: ${site.coverageSource === 'per-cell-raster' ? 'per-cell DEM raster ITM' : 'radial-derived coverage'}`,
+          `  Render source: ${site.coverageSource === 'per-cell-raster' ? 'per-cell terrain raster ITM' : 'radial-derived coverage'}`,
           `  Raster cells: ${site.rasterCells?.length ?? 0}, tested cells: ${site.rasterStats?.testedCells ?? 'n/a'}`,
           `  Engine warnings: ${site.itmWarningSamples ?? 0}, errors: ${site.itmErrorSamples ?? 0}`,
         ]),
@@ -3524,9 +2792,6 @@ function App() {
   }, [
     activeSiteId,
     activeRadialCount,
-    antennaAzimuth,
-    antennaBeamwidth,
-    antennaPattern,
     atmosphericLoss,
     clutterKey,
     combinedAreas,
@@ -3536,7 +2801,6 @@ function App() {
     freq,
     freqBand,
     fringeThresholdDbm,
-    frontBackRatio,
     gain,
     hRx,
     hTx,
@@ -3558,88 +2822,6 @@ function App() {
     serviceGrades,
     sites,
     strongSignalMarginDb,
-    systemLossDb,
-    thresholdMode,
-    txLineLoss,
-    useLandCover,
-    useTwoRay,
-  ]);
-
-  const downloadRadioMobileComparison = useCallback(() => {
-    const rows = sites.flatMap((site) => (site.radioMobileRows ?? []).map((row) => ({
-      siteId: site.id,
-      siteName: site.name,
-      latitude: site.position[0],
-      longitude: site.position[1],
-      siteElevationM: site.elevation,
-      haatM: site.haat,
-      coverageRadials: site.coverageRadials,
-      radialMode: site.coverageRadialMode,
-      bearingDeg: row.bearingDeg,
-      strongReachKm: row.strongReachKm,
-      moderateReachKm: row.moderateReachKm,
-      fringeReachKm: row.weakReachKm,
-      strongThresholdDbm: row.strongThresholdDbm,
-      moderateThresholdDbm: row.moderateThresholdDbm,
-      fringeThresholdDbm: row.weakThresholdDbm,
-      engine: row.engine,
-      frequencyMhz: freq,
-      txPowerW: power,
-      txHeightM: hTx,
-      rxHeightM: hRx,
-      txGainDbi: gain,
-      rxGainDbi: rxAntennaGain,
-      txLineLossDb: txLineLoss,
-      rxLineLossDb: rxLineLoss,
-      totalSystemLossDb: systemLossDb,
-      rxThresholdUv,
-      receiverThresholdDbm,
-      thresholdMode,
-      noiseFloorDbm,
-      noiseFigureDb,
-      requiredSnrDb,
-      itmReliabilityPercent,
-      itmConfidencePercent,
-      maxRangeKm,
-      useLandCover,
-      useTwoRay,
-      propagationModel,
-      coverageRenderMode,
-      rasterCellKm,
-    })));
-
-    if (!rows.length) {
-      setAnalysisNotice('Run coverage first, then download the Radio Mobile comparison CSV.');
-      return;
-    }
-
-    const headers = Object.keys(rows[0]);
-    const csv = [
-      headers.join(','),
-      ...rows.map((row) => headers.map((header) => escapeCsvCell(row[header])).join(',')),
-    ].join('\n');
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-    downloadBlob(blob, `9m2pju-radio-mobile-comparison-${new Date().toISOString().slice(0, 10)}.csv`);
-  }, [
-    coverageRenderMode,
-    freq,
-    gain,
-    hRx,
-    hTx,
-    itmConfidencePercent,
-    itmReliabilityPercent,
-    maxRangeKm,
-    noiseFigureDb,
-    noiseFloorDbm,
-    power,
-    propagationModel,
-    rasterCellKm,
-    receiverThresholdDbm,
-    requiredSnrDb,
-    rxAntennaGain,
-    rxLineLoss,
-    rxThresholdUv,
-    sites,
     systemLossDb,
     thresholdMode,
     txLineLoss,
@@ -3683,7 +2865,6 @@ function App() {
     const haatSamples = [];
     const newPolygons = { strong: [], moderate: [], weak: [] };
     const radialMargins = [];
-    const radioMobileRows = [];
     const itmDistanceGrid = createItmDistanceGrid(maxRangeKm);
     const itmRadialLosses = Array(radialCount).fill(null);
     let itmApiFailures = 0;
@@ -3698,8 +2879,6 @@ function App() {
       haatSamples.push(calculateRadialHaat(siteElevation, hTx, radialSamples));
 
       const effectiveHTx = calculateEffectiveTxHeight(siteElevation, hTx, radialSamples);
-      const antennaPatternLoss = getAntennaPatternLoss({ bearing, antennaAzimuth, antennaBeamwidth, frontBackRatio, antennaPattern });
-      const directionalGain = gain - antennaPatternLoss;
       let itmApiLossMap = null;
 
       if (propagationModel === 'ntiaItmApi' && freq <= ITM_API_MAX_FREQUENCY_MHZ) {
@@ -3727,15 +2906,8 @@ function App() {
         }
       }
 
-      const radioMobileRow = {
-        siteId: site.id,
-        siteName: site.name,
-        bearingDeg: Number(bearing.toFixed(2)),
-        engine: itmApiLossMap ? 'itm-api' : 'local-fallback',
-      };
-
       serviceGrades.forEach((grade) => {
-        const targetLoss = powerDbm + directionalGain + rxAntennaGain - systemLossDb + activeCalibrationOffset - grade.thresholdDbm;
+        const targetLoss = powerDbm + gain + rxAntennaGain - systemLossDb - grade.thresholdDbm;
         const itmRadius = findReliableDistanceFromLossMap({
           itmLossMap: itmApiLossMap,
           freq,
@@ -3771,8 +2943,6 @@ function App() {
           maxRangeKm,
         });
         newPolygons[grade.key].push(getDestinationPoint(site.position[0], site.position[1], bearing, radius));
-        radioMobileRow[`${grade.key}ReachKm`] = Number(radius.toFixed(3));
-        radioMobileRow[`${grade.key}ThresholdDbm`] = Number(grade.thresholdDbm.toFixed(2));
 
         if (grade.key === 'weak') {
           const itmPathLoss = getItmApiPathLoss(itmApiLossMap, radius);
@@ -3811,7 +2981,6 @@ function App() {
           radialMargins.push(targetLoss - pathLossAtRadius);
         }
       });
-      radioMobileRows.push(radioMobileRow);
     }
 
     if (propagationModel === 'ntiaItmApi') {
@@ -3820,7 +2989,7 @@ function App() {
       } else if (itmApiFailures > 0) {
         setItmApiStatus({ state: 'error', message: `ITM API failed on ${itmApiFailures}/${radialCount} radials; local fallback filled gaps.` });
       } else if (itmErrorSamples > 0) {
-        setItmApiStatus({ state: 'warning', message: `ITM completed with ${itmErrorSamples} native error-code sample${itmErrorSamples > 1 ? 's' : ''}; inspect validation before relying on edges.` });
+        setItmApiStatus({ state: 'warning', message: `ITM completed with ${itmErrorSamples} native error-code sample${itmErrorSamples > 1 ? 's' : ''}; inspect settings before relying on edges.` });
       } else if (itmWarningSamples > 0) {
         setItmApiStatus({ state: 'warning', message: `ITM completed with ${itmWarningSamples} warning sample${itmWarningSamples > 1 ? 's' : ''}; prediction is usable but flagged.` });
       } else if (itmApiFallbacks > 0) {
@@ -3866,10 +3035,6 @@ function App() {
           serviceGrades,
           confidence: itmConfidencePercent,
           reliability: itmReliabilityPercent,
-            antennaAzimuth,
-            antennaBeamwidth,
-            frontBackRatio,
-            antennaPattern,
             rainRateMmH: rainRate,
             atmosphericLossDbPerKm: atmosphericLoss,
             useTwoRay,
@@ -3897,7 +3062,7 @@ function App() {
           } else if (Number(rasterStats?.fallbackCells ?? 0) > 0) {
             setItmApiStatus({ state: 'fallback', message: 'Per-cell raster completed, but some cells used the helper fallback engine.' });
           } else {
-            setItmApiStatus({ state: 'ready', message: `Per-cell DEM raster ITM completed for ${rasterStats?.testedCells ?? rasterCells.length} receiver cells.` });
+            setItmApiStatus({ state: 'ready', message: `Per-cell terrain raster ITM completed for ${rasterStats?.testedCells ?? rasterCells.length} receiver cells.` });
           }
         }
       } catch (error) {
@@ -3920,7 +3085,6 @@ function App() {
         itmRadialLosses: propagationModel === 'ntiaItmApi' ? itmRadialLosses : null,
       itmWarningSamples,
       itmErrorSamples,
-      radioMobileRows,
       coveragePolygons: newPolygons,
       rasterCells,
       coverageSource,
@@ -3931,12 +3095,8 @@ function App() {
       failedChunks,
     };
   }, [
-    antennaAzimuth,
-    antennaBeamwidth,
-    activeCalibrationOffset,
     activeClutterLossDb,
     activeRadialCount,
-    antennaPattern,
     atmosphericLoss,
     clutterKey,
     clutterMap,
@@ -3944,7 +3104,6 @@ function App() {
     coverageRadialMode,
     coverageRenderMode,
     freq,
-    frontBackRatio,
     gain,
     hRx,
     hTx,
@@ -4014,25 +3173,22 @@ function App() {
 
   return (
     <div className="app-container">
-      <div className="pro-metrics-bar glass-panel" style={{
-        position: 'absolute', top: '20px', left: '360px', right: '20px', zIndex: 1000,
-        display: 'flex', padding: '12px 24px', gap: '40px', alignItems: 'center', pointerEvents: 'auto'
-      }}>
-        <div style={{ display: 'flex', gap: '15px' }}>
+      <div className="pro-metrics-bar glass-panel">
+        <div className="metric-strip">
           <div className="metric-box">
-            <span style={{ color: '#4dbd74', fontSize: '0.65rem', fontWeight: 'bold' }}>STRONG TOTAL</span>
-            <p style={{ fontSize: '1rem', fontWeight: '800' }}>{combinedAreas.strong.toLocaleString(undefined, { maximumFractionDigits: 0 })} km²</p>
+            <span className="metric-label metric-label-strong">STRONG TOTAL</span>
+            <p className="metric-value">{combinedAreas.strong.toLocaleString(undefined, { maximumFractionDigits: 0 })} km²</p>
           </div>
           <div className="metric-box">
-            <span style={{ color: '#ffc107', fontSize: '0.65rem', fontWeight: 'bold' }}>MODERATE TOTAL</span>
-            <p style={{ fontSize: '1rem', fontWeight: '800' }}>{combinedAreas.moderate.toLocaleString(undefined, { maximumFractionDigits: 0 })} km²</p>
+            <span className="metric-label metric-label-moderate">MODERATE TOTAL</span>
+            <p className="metric-value">{combinedAreas.moderate.toLocaleString(undefined, { maximumFractionDigits: 0 })} km²</p>
           </div>
           <div className="metric-box">
-            <span style={{ color: '#ff4444', fontSize: '0.65rem', fontWeight: 'bold' }}>FRINGE TOTAL</span>
-            <p style={{ fontSize: '1rem', fontWeight: '800' }}>{combinedAreas.weak.toLocaleString(undefined, { maximumFractionDigits: 0 })} km²</p>
+            <span className="metric-label metric-label-fringe">FRINGE TOTAL</span>
+            <p className="metric-value">{combinedAreas.weak.toLocaleString(undefined, { maximumFractionDigits: 0 })} km²</p>
           </div>
         </div>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: '20px' }} className="pc-only-metrics">
+        <div className="pc-only-metrics metrics-meta">
           <div className="metric-badge">
             <Mountain size={14} style={{ marginRight: '6px' }} />
             <span>SITE: {activeSite?.elevation ?? 0}m AMSL</span>
@@ -4064,7 +3220,7 @@ function App() {
             </div>
             <div>
               <h1 style={{ fontSize: '1.2rem', fontWeight: '900', letterSpacing: '0.5px' }}>9M2PJU Coverage Prediction</h1>
-              <p style={{ fontSize: '0.75rem', fontWeight: '600' }}>Multi-Site Coverage Prediction v4.8.0</p>
+                <p style={{ fontSize: '0.75rem', fontWeight: '600' }}>Multi-Site Coverage Prediction v{APP_VERSION}</p>
             </div>
           </div>
         </div>
@@ -4077,7 +3233,7 @@ function App() {
               <img src="/brand_logo_v6.png" alt="Logo" style={{ width: '32px', height: '32px', objectFit: 'contain' }} />
               <div>
                 <h1 style={{ margin: 0, fontSize: '1.1rem', fontWeight: '900', color: 'var(--title-blue)', letterSpacing: '0.5px' }}>9M2PJU Coverage Prediction</h1>
-                  <p style={{ margin: 0, fontSize: '0.65rem', fontWeight: '600', color: 'var(--text-secondary)' }}>Multi-Site Coverage Prediction v4.8.0</p>
+                  <p style={{ margin: 0, fontSize: '0.65rem', fontWeight: '600', color: 'var(--text-secondary)' }}>Multi-Site Coverage Prediction v{APP_VERSION}</p>
               </div>
             </div>
           </div>
@@ -4088,13 +3244,6 @@ function App() {
                 className={`action-button pro-btn ${isAnalyzing ? 'loading' : ''}`}
                 onClick={analyzeTerrain}
                 disabled={isAnalyzing}
-                style={{
-                  width: '100%', padding: '14px', borderRadius: '12px',
-                  background: 'linear-gradient(135deg, #00c6ff, #0072ff)',
-                  color: 'white', border: 'none', cursor: 'pointer', fontWeight: '900',
-                  fontSize: '0.9rem', marginBottom: '20px', boxShadow: '0 4px 15px rgba(0, 114, 255, 0.3)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px'
-                }}
               >
                 {isAnalyzing ? <div className="loading-spinner" style={{ width: '18px', height: '18px' }} /> : <Zap size={18} fill="white" />}
                 {isAnalyzing ? 'SCALING TERRAIN...' : `RUN ${sites.length}-SITE COVERAGE`}
@@ -4115,7 +3264,7 @@ function App() {
           </div>
 
           <div className="mobile-only">
-            <p style={{ fontSize: '0.7rem', color: '#888', marginBottom: '15px', fontWeight: 'bold' }}>RF METRICS (km²)</p>
+            <p className="section-kicker">RF METRICS (km²)</p>
             <div className={`analysis-notice ${analysisNotice.includes('could not') ? 'error' : analysisNotice.includes('fallback') ? 'warning' : ''}`}>
               {analysisNotice}
             </div>
@@ -4127,37 +3276,37 @@ function App() {
             </button>
             <div className="mobile-metrics">
               <div className="mobile-metric-card">
-                <span style={{ fontSize: '0.6rem', color: '#4dbd74', display: 'block' }}>STRONG</span>
-                <strong style={{ fontSize: '0.9rem' }}>{combinedAreas.strong.toFixed(0)}</strong>
+                <span className="mobile-metric-label metric-label-strong">STRONG</span>
+                <strong className="mobile-metric-value">{combinedAreas.strong.toFixed(0)}</strong>
               </div>
               <div className="mobile-metric-card">
-                <span style={{ fontSize: '0.6rem', color: '#f57f17', display: 'block' }}>MODERATE</span>
-                <strong style={{ fontSize: '0.9rem' }}>{combinedAreas.moderate.toFixed(0)}</strong>
+                <span className="mobile-metric-label metric-label-moderate">MODERATE</span>
+                <strong className="mobile-metric-value">{combinedAreas.moderate.toFixed(0)}</strong>
               </div>
               <div className="mobile-metric-card">
-                <span style={{ fontSize: '0.6rem', color: '#d32f2f', display: 'block' }}>FRINGE</span>
-                <strong style={{ fontSize: '0.9rem' }}>{combinedAreas.weak.toFixed(0)}</strong>
+                <span className="mobile-metric-label metric-label-fringe">FRINGE</span>
+                <strong className="mobile-metric-value">{combinedAreas.weak.toFixed(0)}</strong>
               </div>
             </div>
             <button className="about-button" type="button" onClick={() => setIsAboutOpen(true)}>
               <Info size={14} /> About
             </button>
-          </div>
+            </div>
 
-          <div className="control-group">
-            <label><Gauge size={12} style={{ marginRight: '6px' }} /> EXPERIMENT TOOLS</label>
-            <div className={`trust-banner ${activeSiteTrust.tone}`}>
-              <strong>{activeSiteTrust.level}</strong>
-              <span>{activeSiteExplanation}</span>
-            </div>
-            <div className="segmented-control" role="group" aria-label="Map tool mode">
-              <button type="button" className={mapToolMode === 'place' ? 'active' : ''} onClick={() => setMapToolMode('place')}>
-                <MapPin size={14} /> Place
-              </button>
-              <button type="button" className={mapToolMode === 'query' ? 'active' : ''} onClick={() => setMapToolMode('query')}>
-                <Crosshair size={14} /> Query
-              </button>
-            </div>
+            <div className="control-group">
+              <label><MapPin size={12} style={{ marginRight: '6px' }} /> PLANNING TOOLS</label>
+              <div className={`trust-banner ${activeSiteTrust.tone}`}>
+                <strong>{activeSiteTrust.level}</strong>
+                <span>{activeSiteExplanation}</span>
+              </div>
+              <div className="segmented-control" role="group" aria-label="Map tool mode">
+                <button type="button" className={mapToolMode === 'place' ? 'active' : ''} onClick={() => setMapToolMode('place')}>
+                  <MapPin size={14} /> Place site
+                </button>
+                <button type="button" className={mapToolMode === 'query' ? 'active' : ''} onClick={() => setMapToolMode('query')}>
+                  <Crosshair size={14} /> Check point
+                </button>
+              </div>
             {queryPoint && (
               <div className="query-card">
                 <div className="query-card-title">
@@ -4194,41 +3343,15 @@ function App() {
               ))}
             </div>
             <div className="compact-button-grid">
-              {SAMPLE_SCENARIOS.map((scenario) => (
-                <button
-                  key={scenario.key}
-                  className={`secondary-button compact-button ${isSampleScenarioActive(scenario) ? 'active-preset' : ''}`}
-                  type="button"
-                  aria-pressed={isSampleScenarioActive(scenario)}
-                  onClick={() => applySampleScenario(scenario)}
-                >
-                  {scenario.label}
-                </button>
-              ))}
-            </div>
-            <div className="validation-stats">
-              {multiBandPreview.map((band) => (
-                <span key={band.key}>{band.label}: {formatDb(band.marginDb)}</span>
-              ))}
-            </div>
-            <label className="file-import-button">
-              <Database size={14} /> Import local DEM
-              <input type="file" accept=".csv,.json,.geojson,text/csv,application/json" onChange={importLocalDem} />
-            </label>
-            <div className="mode-note">{localDemNotice}</div>
-            <div className="compact-button-grid">
               <button className="secondary-button compact-button" type="button" onClick={exportScenario}>
-                <Download size={14} /> Scenario
+                <Download size={14} /> Save setup
               </button>
               <label className="file-import-button compact-file-button">
-                <Upload size={14} /> Scenario
+                <Upload size={14} /> Load setup
                 <input type="file" accept=".json,application/json" onChange={importScenario} />
               </label>
               <button className="secondary-button compact-button" type="button" onClick={copyShareLink}>
-                <Share2 size={14} /> Link
-              </button>
-              <button className="secondary-button compact-button" type="button" onClick={downloadExperimentPackage}>
-                <Download size={14} /> Package
+                <Share2 size={14} /> Copy link
               </button>
             </div>
             <label className="toggle-field full-width-toggle">
@@ -4286,6 +3409,35 @@ function App() {
           </div>
 
           <div className="control-group">
+            <label className="section-kicker"><Radio size={12} /> BAND SELECTOR</label>
+            <div className="band-selector" role="group" aria-label="Band selector">
+              {BAND_OPTIONS.map((band) => (
+                <button
+                  key={band.key}
+                  type="button"
+                    className={`band-button ${freqBand === band.key ? 'active' : ''}`}
+                    onClick={() => {
+                      setFreqBand(band.key);
+                      setFreq(band.defaultFreq);
+                      markCoverageStale('Band changed. Run coverage to recalculate.');
+                    }}
+                >
+                  <span>{band.label}</span>
+                  <small>{band.rangeLabel}</small>
+                </button>
+              ))}
+            </div>
+            <label>FREQUENCY: {freq}MHz</label>
+            <input
+              type="range"
+              min={activeBand.min}
+                max={activeBand.max}
+                value={freq}
+                onChange={(e) => updatePredictionSetting(setFreq, Number(e.target.value), 'Frequency changed. Run coverage to recalculate.')}
+              />
+          </div>
+
+          <div className="control-group">
             <label><Activity size={12} style={{ marginRight: '6px' }} /> TX POWER: {formatPower(power)}W</label>
             <div className="slider-container">
               <input type="range" min="0.1" max="100" step="0.1" value={power} onChange={(e) => updatePredictionSetting(setPower, Number(e.target.value))} />
@@ -4322,7 +3474,7 @@ function App() {
           <div className="control-group">
             <label><Activity size={12} style={{ marginRight: '6px' }} /> ANTENNA GAIN: {gain}dBi</label>
             <div className="slider-container">
-                <input type="range" min="0" max="20" step="0.5" value={gain} onChange={(e) => updatePredictionSetting(setGain, Number(e.target.value))} />
+                <input type="range" min="0" max="20" step="0.5" value={gain} onChange={(e) => updatePredictionSetting(setGain, Number(e.target.value), 'Antenna gain changed. Run coverage to recalculate.')} />
               <input
                 className="numeric-input"
                 type="number"
@@ -4331,7 +3483,7 @@ function App() {
                 step="0.5"
                 value={gain}
                 aria-label="TX antenna gain in dBi"
-                  onChange={(e) => updatePredictionSetting(setGain, clamp(Number(e.target.value), 0, 20))}
+                  onChange={(e) => updatePredictionSetting(setGain, clamp(Number(e.target.value), 0, 20), 'Antenna gain changed. Run coverage to recalculate.')}
               />
             </div>
           </div>
@@ -4360,9 +3512,9 @@ function App() {
               value={modeKey}
               onChange={(e) => {
                 const nextMode = e.target.value;
-                const nextProfile = MODE_PROFILES[nextMode] ?? MODE_PROFILES.fm;
-                setModeKey(nextMode);
-                setFreq(nextProfile.defaultFreq);
+                  const nextProfile = MODE_PROFILES[nextMode] ?? MODE_PROFILES.fm;
+                  setModeKey(nextMode);
+                  setFreq(nextProfile.defaultFreq);
                   setFreqBand(nextProfile.defaultFreq < 300 ? 'vhf' : nextProfile.defaultFreq < 3000 ? 'uhf' : 'shf');
                   setRequiredSnrDb(nextProfile.defaultRequiredSnr);
                   setRxThresholdUv(Number(dbmToMicrovolts(nextProfile.thresholds.weak).toFixed(3)));
@@ -4457,8 +3609,8 @@ function App() {
               <label>ITM confidence %
                   <input className="numeric-input compact-input" type="number" min="1" max="99" step="1" value={itmConfidencePercent} onChange={(e) => updatePredictionSetting(setItmConfidencePercent, clamp(toNumber(e.target.value), 1, 99), 'ITM confidence changed. Run coverage to recalculate.')} />
               </label>
-              <label>Validation mode
-                  <select className="mini-select" value={coverageRadialMode} onChange={(e) => updatePredictionSetting(setCoverageRadialMode, e.target.value, 'Validation mode changed. Run coverage to recalculate.')}>
+              <label>Radial detail
+                  <select className="mini-select" value={coverageRadialMode} onChange={(e) => updatePredictionSetting(setCoverageRadialMode, e.target.value, 'Radial detail changed. Run coverage to recalculate.')}>
                   {COVERAGE_RADIAL_OPTIONS.map((option) => (
                     <option key={option.key} value={option.key}>{option.label}</option>
                   ))}
@@ -4501,113 +3653,22 @@ function App() {
             </div>
           </div>
 
-          <div className="control-group engineering-group">
-            <label><Antenna size={12} style={{ marginRight: '6px' }} /> ANTENNA PATTERN</label>
-            <div className="engineering-grid">
-              <label>Azimuth
-                  <input className="numeric-input compact-input" type="number" min="0" max="359" step="1" value={antennaAzimuth} onChange={(e) => updatePredictionSetting(setAntennaAzimuth, clamp(toNumber(e.target.value), 0, 359), 'Antenna azimuth changed. Run coverage to recalculate.')} />
-              </label>
-              <label>Beamwidth
-                  <input className="numeric-input compact-input" type="number" min="5" max="360" step="5" value={antennaBeamwidth} onChange={(e) => updatePredictionSetting(setAntennaBeamwidth, clamp(toNumber(e.target.value), 5, 360), 'Antenna beamwidth changed. Run coverage to recalculate.')} />
-              </label>
-              <label>F/B ratio
-                  <input className="numeric-input compact-input" type="number" min="0" max="40" step="1" value={frontBackRatio} onChange={(e) => updatePredictionSetting(setFrontBackRatio, clamp(toNumber(e.target.value), 0, 40), 'Antenna F/B ratio changed. Run coverage to recalculate.')} />
-              </label>
-            </div>
-            <label className="file-import-button">
-              <Upload size={14} /> Import antenna pattern
-              <input type="file" accept=".csv,text/csv" onChange={importAntennaPattern} />
-            </label>
-            <div className="mode-note">{patternNotice}</div>
-          </div>
-
-          <div className="control-group">
-            <label style={{ fontSize: '0.7rem', color: '#888', display: 'block', marginBottom: '10px' }}><Radio size={12} /> BAND SELECTOR</label>
-            <div className="band-selector" role="group" aria-label="Band selector">
-              {BAND_OPTIONS.map((band) => (
-                <button
-                  key={band.key}
-                  type="button"
-                    className={`band-button ${freqBand === band.key ? 'active' : ''}`}
-                    onClick={() => {
-                      setFreqBand(band.key);
-                      setFreq(band.defaultFreq);
-                      markCoverageStale('Band changed. Run coverage to recalculate.');
-                    }}
-                >
-                  <span>{band.label}</span>
-                  <small>{band.rangeLabel}</small>
-                </button>
-              ))}
-            </div>
-            <label>FREQUENCY: {freq}MHz</label>
-            <input
-              type="range"
-              min={activeBand.min}
-                max={activeBand.max}
-                value={freq}
-                onChange={(e) => updatePredictionSetting(setFreq, Number(e.target.value), 'Frequency changed. Run coverage to recalculate.')}
-              />
-          </div>
-
-          <div className="control-group" style={{ marginTop: '25px', borderTop: '1px solid var(--glass-border)', paddingTop: '15px' }}>
-            <p style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', marginBottom: '10px', letterSpacing: '1px' }}>PREDICTED ZONES</p>
+          <div className="control-group legend-group">
+            <p className="section-kicker">PREDICTED ZONES</p>
             <div className="pro-legend-item">
-              <div style={{ width: 10, height: 10, background: '#4dbd74', border: '1px solid white' }}></div>
+              <div style={{ width: 10, height: 10, background: '#52c878', border: '1px solid white' }}></div>
               <span>Strong signal &gt; {serviceGrades.find((grade) => grade.key === 'strong')?.thresholdDbm.toFixed(0)} dBm</span>
             </div>
             <div className="pro-legend-item">
-              <div style={{ width: 10, height: 10, background: '#ffc107', border: '1px solid white' }}></div>
+              <div style={{ width: 10, height: 10, background: '#f7c948', border: '1px solid white' }}></div>
               <span>Moderate signal &gt; {serviceGrades.find((grade) => grade.key === 'moderate')?.thresholdDbm.toFixed(0)} dBm</span>
             </div>
             <div className="pro-legend-item">
-              <div style={{ width: 10, height: 10, background: '#ff4444', border: '1px solid white' }}></div>
+              <div style={{ width: 10, height: 10, background: '#fb7185', border: '1px solid white' }}></div>
               <span>Fringe signal &gt; {serviceGrades.find((grade) => grade.key === 'weak')?.thresholdDbm.toFixed(0)} dBm</span>
             </div>
           </div>
 
-          <div className="control-group engineering-group validation-group">
-            <label><Upload size={12} style={{ marginRight: '6px' }} /> FIELD VALIDATION</label>
-            <label className="file-import-button">
-              <Upload size={14} /> Import CSV / GPX
-              <input type="file" accept=".csv,.gpx,text/csv,application/gpx+xml" onChange={importMeasurements} />
-            </label>
-            <div className="engineering-summary">{measurementNotice}</div>
-            <div className="validation-stats">
-              <span>Samples: {validationReport.summary.count}</span>
-              <span>RMSE: {validationReport.summary.rmse.toFixed(1)} dB</span>
-              <span>Within 10 dB: {validationReport.summary.within10Db.toFixed(0)}%</span>
-            </div>
-            <div className="engineering-summary">
-              Calibration {calibrationEnabled ? `applied ${calibrationOffset.toFixed(1)} dB` : 'off'} · measured bias {validationReport.summary.meanError.toFixed(1)} dB
-            </div>
-            <button className="secondary-button" type="button" onClick={applyMeasurementCalibration} disabled={validationReport.summary.count < 3}>
-              <Activity size={14} /> Apply local calibration
-            </button>
-            <button className="secondary-button" type="button" onClick={downloadValidationReport} disabled={!measurements.length}>
-              <Download size={14} /> Download validation report
-            </button>
-            <button className="secondary-button" type="button" onClick={downloadRadioMobileComparison} disabled={!sites.some((site) => site.radioMobileRows?.length)}>
-              <Download size={14} /> Download Radio Mobile CSV
-            </button>
-            <label className="file-import-button">
-              <Upload size={14} /> Import Radio Mobile CSV
-              <input type="file" accept=".csv,text/csv" onChange={importRadioMobileReference} />
-            </label>
-            <div className="engineering-summary">{radioMobileNotice}</div>
-            {radioMobileComparisonReport && (
-              <>
-                <div className="validation-stats">
-                  <span>Matched: {radioMobileComparisonReport.matchedRows}</span>
-                  <span>Fringe MAE: {radioMobileComparisonReport.fringe.mae.toFixed(1)} km</span>
-                  <span>Within 5km: {radioMobileComparisonReport.fringe.within[5].toFixed(0)}%</span>
-                </div>
-                <div className="engineering-summary">
-                  Strong MAE {radioMobileComparisonReport.strong.mae.toFixed(1)} km · moderate MAE {radioMobileComparisonReport.moderate.mae.toFixed(1)} km · fringe max error {radioMobileComparisonReport.fringe.maxAbs.toFixed(1)} km
-                </div>
-              </>
-            )}
-          </div>
         </div>
       </div>
 
@@ -4710,7 +3771,7 @@ function App() {
           <CircleMarker
             center={queryPoint.position}
             radius={8}
-            pathOptions={{ color: '#ffffff', fillColor: queryPoint.gradeKey === 'strong' ? '#4dbd74' : queryPoint.gradeKey === 'moderate' ? '#ffc107' : queryPoint.gradeKey === 'weak' ? '#ff4444' : '#6c757d', fillOpacity: 0.9, weight: 3 }}
+            pathOptions={{ color: '#ffffff', fillColor: queryPoint.gradeKey === 'strong' ? '#52c878' : queryPoint.gradeKey === 'moderate' ? '#f7c948' : queryPoint.gradeKey === 'weak' ? '#fb7185' : '#64748b', fillOpacity: 0.9, weight: 3 }}
           >
             <Popup>
               <div style={{ color: '#000', fontSize: '0.8rem' }}>
@@ -4740,28 +3801,6 @@ function App() {
           </CircleMarker>
         ))}
 
-        {validationReport.comparisons.map((measurement) => {
-          const absError = Math.abs(measurement.errorDb);
-          const color = absError <= 6 ? '#4dbd74' : absError <= 10 ? '#ffc107' : '#ff4444';
-          return (
-            <CircleMarker
-              key={measurement.id}
-              center={measurement.position}
-              radius={6}
-              pathOptions={{ color, fillColor: color, fillOpacity: 0.78, weight: 2 }}
-            >
-              <Popup>
-                <div style={{ color: '#000', fontSize: '0.8rem' }}>
-                  <strong>FIELD MEASUREMENT</strong><br />
-                  Measured: {measurement.measuredDbm.toFixed(1)} dBm<br />
-                  Predicted: {measurement.estimatedDbm.toFixed(1)} dBm ({measurement.predictedGrade})<br />
-                  Error: {measurement.errorDb.toFixed(1)} dB<br />
-                  Site: {measurement.predictedSite}
-                </div>
-              </Popup>
-            </CircleMarker>
-          );
-        })}
       </MapContainer>
 
       {isAboutOpen && (
@@ -4772,13 +3811,10 @@ function App() {
             </button>
             <h2 id="about-title">About</h2>
             <p>
-              This app uses ITS Irregular Terrain Model (ITM) when the service is reachable, with local terrain-aware fallback models, so it should give useful planning-grade coverage zones. Real-world results can still differ due to buildings, foliage, antenna pattern, local noise, receiver quality, weather, and terrain data accuracy.
+              This app uses ITS Irregular Terrain Model (ITM) when the service is reachable, with local terrain-aware fallback models, so it should give useful planning-grade coverage zones. Real-world results can still differ due to buildings, foliage, antenna installation, local noise, receiver quality, weather, and terrain data accuracy.
             </p>
             <p>
-              In simple words: use this app for planning and estimating coverage, not as certified RF engineering truth. The prediction becomes more reliable when you compare it with real field measurements and adjust the settings.
-            </p>
-            <p>
-              You can import CSV or GPX field measurements to compare real signal readings with the predicted coverage and download a validation report.
+              In simple words: use this app for planning and estimating coverage, not as certified RF engineering truth. For important links, compare the prediction with real signal reports and adjust the RF assumptions.
             </p>
             <h3>How to use</h3>
             <ol className="about-list">
@@ -4786,7 +3822,7 @@ function App() {
               <li>Set TX power, antenna gain, frequency, tower height, and RX height.</li>
               <li>Choose the mode profile, engineering model, clutter type, and link budget values.</li>
               <li>Press Run Coverage to draw strong, moderate, and fringe coverage zones.</li>
-              <li>Import CSV or GPX field readings to check how close the prediction is to real signals.</li>
+              <li>Use Query mode to check expected signal level at a specific receiver point.</li>
             </ol>
             <h3>Settings</h3>
             <dl className="about-settings">
@@ -4815,17 +3851,13 @@ function App() {
               <dt>ITM reliability</dt>
               <dd>Reliability percentage sent to the ITM service for Longley-Rice path-loss sampling.</dd>
               <dt>ITM confidence</dt>
-              <dd>Confidence percentage sent to the ITM service. Keep 50% for Radio Mobile-style comparison unless you need a more conservative statistical case.</dd>
+              <dd>Confidence percentage sent to the ITM service. Keep 50% for normal planning unless you need a more conservative statistical case.</dd>
               <dt>Render mode</dt>
-              <dd>Choose radial polygons for clean boundaries or raster cells for Radio Mobile-style visual comparison.</dd>
-              <dt>Antenna pattern</dt>
-              <dd>Azimuth points the antenna, beamwidth sets its main lobe width, and F/B ratio reduces back-side coverage.</dd>
+              <dd>Choose radial polygons for clean boundaries or raster cells for per-cell coverage display.</dd>
               <dt>Frequency</dt>
               <dd>Operating frequency in MHz. VHF/UHF/SHF behave differently over distance and terrain.</dd>
               <dt>Tower height</dt>
               <dd>Transmitter antenna height above ground. More height usually improves line-of-sight coverage.</dd>
-              <dt>Field validation</dt>
-              <dd>Import measured signal points to compare predicted and real results, then export a report.</dd>
             </dl>
             <p className="about-credit">
               Made by <a href="https://hamradio.my" target="_blank" rel="noreferrer">9M2PJU</a>
@@ -4866,47 +3898,79 @@ function App() {
         .metric-badge {
           display: flex;
           align-items: center;
-          background: rgba(0,0,0,0.05);
-          padding: 6px 12px;
-          border-radius: 6px;
-          font-size: 0.7rem;
-          font-weight: 600;
+          background: rgba(255,255,255,0.06);
+          border: 1px solid rgba(148,163,184,0.18);
+          padding: 7px 10px;
+          border-radius: 8px;
+          font-size: 0.69rem;
+          font-weight: 760;
           color: var(--text-secondary);
         }
+        .action-button.pro-btn {
+          width: 100%;
+          min-height: 46px;
+          padding: 12px 14px;
+          border-radius: 10px;
+          background: linear-gradient(135deg, var(--accent-teal), var(--accent-blue));
+          color: #062023;
+          border: none;
+          cursor: pointer;
+          font-weight: 920;
+          font-size: 0.86rem;
+          margin-bottom: 14px;
+          box-shadow: 0 12px 24px rgba(45, 212, 191, 0.2);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 9px;
+          transition: transform 0.18s ease, box-shadow 0.18s ease, filter 0.18s ease;
+        }
+        .action-button.pro-btn:hover,
+        .action-button.pro-btn:focus-visible {
+          transform: translateY(-1px);
+          box-shadow: 0 16px 30px rgba(45, 212, 191, 0.24);
+          filter: brightness(1.04);
+          outline: none;
+        }
+        .action-button.pro-btn:disabled {
+          opacity: 0.72;
+          cursor: wait;
+          transform: none;
+        }
         .analysis-notice {
-          margin: 8px 0 14px;
-          padding: 9px 10px;
-          border-radius: 8px;
-          border: 1px solid rgba(255,255,255,0.1);
-          background: rgba(255,255,255,0.06);
+          margin: 8px 0 12px;
+          padding: 10px 11px;
+          border-radius: 9px;
+          border: 1px solid rgba(148,163,184,0.2);
+          background: rgba(255,255,255,0.055);
           color: var(--text-secondary);
           font-size: 0.72rem;
-          line-height: 1.35;
-          font-weight: 700;
+          line-height: 1.42;
+          font-weight: 730;
           overflow-wrap: anywhere;
           word-break: normal;
         }
         .analysis-notice.warning {
-          border-color: rgba(255, 193, 7, 0.35);
-          color: #ffd56a;
-          background: rgba(255, 193, 7, 0.1);
+          border-color: rgba(247, 201, 72, 0.4);
+          color: #f9d66e;
+          background: rgba(247, 201, 72, 0.1);
         }
         .analysis-notice.error {
-          border-color: rgba(255, 68, 68, 0.35);
-          color: #ff9b9b;
-          background: rgba(255, 68, 68, 0.1);
+          border-color: rgba(251, 113, 133, 0.4);
+          color: #fda4af;
+          background: rgba(251, 113, 133, 0.1);
         }
         .toggle-field {
-          min-height: 34px;
+          min-height: 40px;
           display: flex !important;
           align-items: center;
           gap: 8px;
-          padding: 7px 8px;
-          border: 1px solid rgba(255,255,255,0.12);
-          border-radius: 8px;
-          background: rgba(255,255,255,0.06);
+          padding: 8px 10px;
+          border: 1px solid rgba(148,163,184,0.2);
+          border-radius: 9px;
+          background: rgba(255,255,255,0.055);
           color: var(--text-primary) !important;
-          font-weight: 800;
+          font-weight: 780;
         }
         .toggle-field input {
           width: 14px;
@@ -4918,17 +3982,17 @@ function App() {
         }
         .export-result-button {
           width: 100%;
-          margin: 0 0 10px;
+          margin: 0 0 9px;
         }
         .about-button {
           width: 100%;
-          min-height: 38px;
-          border-radius: 8px;
-          border: 1px solid rgba(255,255,255,0.14);
-          background: rgba(255,255,255,0.08);
+          min-height: 42px;
+          border-radius: 9px;
+          border: 1px solid rgba(148,163,184,0.22);
+          background: rgba(255,255,255,0.07);
           color: var(--text-primary);
           cursor: pointer;
-          font-weight: 800;
+          font-weight: 820;
           display: flex;
           align-items: center;
           justify-content: center;
@@ -4938,8 +4002,8 @@ function App() {
         }
         .about-button:hover,
         .about-button:focus-visible {
-          border-color: rgba(0, 163, 255, 0.55);
-          background: rgba(0, 163, 255, 0.16);
+          border-color: rgba(45, 212, 191, 0.5);
+          background: rgba(45, 212, 191, 0.12);
           outline: none;
         }
         .about-modal-backdrop {
@@ -4950,7 +4014,7 @@ function App() {
           align-items: center;
           justify-content: center;
           padding: 20px;
-          background: rgba(0, 0, 0, 0.56);
+          background: rgba(5, 10, 16, 0.62);
           pointer-events: auto;
         }
         .about-modal {
@@ -5031,9 +4095,9 @@ function App() {
           right: 14px;
           width: 34px;
           height: 34px;
-          border-radius: 8px;
-          border: 1px solid rgba(255,255,255,0.14);
-          background: rgba(255,255,255,0.08);
+          border-radius: 9px;
+          border: 1px solid rgba(148,163,184,0.22);
+          background: rgba(255,255,255,0.07);
           color: var(--text-primary);
           display: flex;
           align-items: center;
@@ -5042,16 +4106,16 @@ function App() {
         }
         .about-close-button:hover,
         .about-close-button:focus-visible {
-          border-color: rgba(0, 163, 255, 0.55);
-          background: rgba(0, 163, 255, 0.16);
+          border-color: rgba(45, 212, 191, 0.5);
+          background: rgba(45, 212, 191, 0.12);
           outline: none;
         }
         .leaflet-control-layers {
-          border: 1px solid rgba(255,255,255,0.18) !important;
+          border: 1px solid rgba(148,163,184,0.24) !important;
           border-radius: 10px !important;
-          background: rgba(20, 24, 33, 0.88) !important;
+          background: rgba(15, 23, 32, 0.92) !important;
           backdrop-filter: blur(12px);
-          color: #f0f6fc;
+          color: var(--text-primary);
           box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35) !important;
         }
         .leaflet-top.leaflet-right {
@@ -5097,8 +4161,8 @@ function App() {
         }
         .site-list {
           display: grid;
-          gap: 8px;
-          margin-bottom: 10px;
+          gap: 9px;
+          margin-bottom: 11px;
         }
         .site-chip {
           display: grid;
@@ -5106,18 +4170,20 @@ function App() {
           align-items: center;
           gap: 8px;
           width: 100%;
-          padding: 8px 10px;
-          border-radius: 8px;
-          border: 1px solid rgba(255,255,255,0.12);
-          background: rgba(255,255,255,0.05);
+          min-height: 42px;
+          padding: 9px 10px;
+          border-radius: 9px;
+          border: 1px solid rgba(148,163,184,0.2);
+          background: rgba(255,255,255,0.055);
           color: var(--text-primary);
           cursor: pointer;
-          font-weight: 700;
+          font-weight: 780;
           text-align: left;
+          transition: background 0.18s ease, border-color 0.18s ease;
         }
         .site-chip.active {
           border-color: var(--site-color);
-          background: color-mix(in srgb, var(--site-color) 18%, rgba(255,255,255,0.05));
+          background: color-mix(in srgb, var(--site-color) 20%, rgba(255,255,255,0.055));
         }
         .site-chip small {
           color: var(--text-secondary);
@@ -5133,13 +4199,14 @@ function App() {
         }
         .secondary-button,
         .icon-button {
-          min-height: 38px;
-          border-radius: 8px;
-          border: 1px solid rgba(255,255,255,0.14);
-          background: rgba(255,255,255,0.08);
+          min-height: 42px;
+          border-radius: 9px;
+          border: 1px solid rgba(148,163,184,0.22);
+          background: rgba(255,255,255,0.07);
           color: var(--text-primary);
           cursor: pointer;
-          font-weight: 800;
+          font-weight: 820;
+          transition: background 0.18s ease, border-color 0.18s ease, transform 0.18s ease;
         }
         .secondary-button {
           display: flex;
@@ -5147,10 +4214,19 @@ function App() {
           justify-content: center;
           gap: 8px;
         }
+        .secondary-button:hover,
+        .secondary-button:focus-visible,
+        .icon-button:hover,
+        .icon-button:focus-visible {
+          border-color: rgba(45, 212, 191, 0.5);
+          background: rgba(45, 212, 191, 0.12);
+          outline: none;
+        }
         .secondary-button:disabled,
         .icon-button:disabled {
-          opacity: 0.45;
+          opacity: 0.5;
           cursor: not-allowed;
+          background: rgba(255,255,255,0.045);
         }
       `}</style>
     </div>

@@ -10,6 +10,24 @@ const assert = (condition, message) => {
   if (!condition) throw new Error(message);
 };
 
+const microvoltsToDbm = (microvolts, impedanceOhms = 50) => {
+  const volts = Math.max(0.001, microvolts) * 1e-6;
+  return 10 * Math.log10(((volts ** 2) / impedanceOhms) * 1000);
+};
+
+const dbmToMicrovolts = (dbm, impedanceOhms = 50) => {
+  const watts = 10 ** ((dbm - 30) / 10);
+  return Math.sqrt(watts * impedanceOhms) * 1e6;
+};
+
+const calculateNoiseFloorDbm = (bandwidthHz, noiseFigureDb = 6) => (
+  -174 + 10 * Math.log10(Math.max(1, bandwidthHz)) + noiseFigureDb
+);
+
+const calculateRequiredSignalDbm = ({ bandwidthHz, noiseFigureDb, requiredSnrDb }) => (
+  calculateNoiseFloorDbm(bandwidthHz, noiseFigureDb) + requiredSnrDb
+);
+
 const calculateFreeSpacePathLoss = (freq, distanceKm) => (
   32.44 + 20 * Math.log10(Math.max(0.001, distanceKm)) + 20 * Math.log10(clamp(freq, MIN_FREQUENCY_MHZ, MAX_FREQUENCY_MHZ))
 );
@@ -157,6 +175,18 @@ const findReliableDistanceFromLossMap = (itmLossMap, targetLoss, externalLoss = 
   }
   return lastPassing;
 };
+
+const fmHalfMicrovoltDbm = microvoltsToDbm(0.5);
+assert(Math.abs(fmHalfMicrovoltDbm - (-113.01)) < 0.02, '0.5 uV in 50 ohms should be about -113.01 dBm');
+assert(Math.abs(dbmToMicrovolts(fmHalfMicrovoltDbm) - 0.5) < 0.001, 'dBm/uV conversion should round-trip for FM threshold');
+assert(
+  Math.abs(calculateRequiredSignalDbm({ bandwidthHz: 12500, noiseFigureDb: 6, requiredSnrDb: 14 }) - fmHalfMicrovoltDbm) < 0.1,
+  'FM noise-floor mode should align with the 0.5 uV planning threshold',
+);
+assert(
+  calculateRequiredSignalDbm({ bandwidthHz: 125000, noiseFigureDb: 6, requiredSnrDb: -20 }) < -136.9,
+  'LoRa SF12 125 kHz threshold should be near -137 dBm with 6 dB NF',
+);
 
 for (const freq of [30, 50, 145, 433, 900, 1296, 1800, 2400, 3000, 5600, 10368, 24000]) {
   for (const distanceKm of [0.1, 0.5, 1, 10, 50]) {

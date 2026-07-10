@@ -149,7 +149,7 @@ const MAP_LAYERS = [
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
   },
 ];
-const APP_VERSION = '4.8.1';
+const APP_VERSION = '4.9.0';
 const EMPTY_AREAS = { strong: 0, moderate: 0, weak: 0 };
 const EMPTY_POLYGONS = { strong: null, moderate: null, weak: null };
 const RADIALS_COUNT = 72;

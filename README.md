@@ -9,14 +9,14 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Version-v4.8.1-0072ff?style=for-the-badge" alt="Version v4.8.1">
+  <img src="https://img.shields.io/badge/Version-v4.9.0-0072ff?style=for-the-badge" alt="Version v4.9.0">
   <img src="https://img.shields.io/badge/Default_Model-ITS_ITM_%2F_Longley--Rice-7c3aed?style=for-the-badge" alt="Default model ITS ITM / Longley-Rice">
   <img src="https://img.shields.io/badge/License-AGPL--3.0--or--later-4dbd74?style=for-the-badge" alt="AGPL-3.0-or-later">
 </p>
 
 ## Current Status
 
-**9M2PJU Coverage Prediction v4.8.1** is a usable planning tool for amateur radio operators. It is suitable for repeater/site planning, coverage comparison, and operator-level “will this likely work?” studies.
+**9M2PJU Coverage Prediction v4.9.0** is a usable planning tool for amateur radio operators. It is suitable for repeater/site planning, coverage comparison, and operator-level “will this likely work?” studies.
 
 It should not be described as certified RF engineering software. Prediction quality still depends on terrain data, ITM service availability, antenna gain/installation, clutter, local noise, receiver performance, and real-world signal conditions.
 

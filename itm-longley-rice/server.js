@@ -1,6 +1,14 @@
 import http from 'node:http';
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import {
+  clamp,
+  calculateShfRainLoss,
+  calculateAtmosphericLoss,
+  calculateTwoRayLoss,
+  calculateFallbackItmStyleLoss,
+} from '../src/rf/propagation.js';
 
 const PORT = Number(process.env.PORT ?? 8787);
 const ITM_RUNNER = process.env.ITM_RUNNER ?? '/usr/local/bin/itm-runner';
@@ -22,10 +30,51 @@ const ELEVATION_TIMEOUT_MS = Number(process.env.ELEVATION_TIMEOUT_MS ?? 12000);
 const ELEVATION_RETRIES = Number(process.env.ELEVATION_RETRIES ?? 2);
 const RASTER_WORKERS = Number(process.env.RASTER_WORKERS ?? 2);
 const EARTH_RADIUS_KM = 6371;
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const RATE_LIMIT_MAX_REQUESTS = Number(process.env.RATE_LIMIT_MAX ?? 60);
+const rateLimitMap = new Map();
+
+const checkRateLimit = (ip) => {
+  const now = Date.now();
+  const entry = rateLimitMap.get(ip);
+  if (!entry || now - entry.timestamp > RATE_LIMIT_WINDOW_MS) {
+    rateLimitMap.set(ip, { timestamp: now, count: 1 });
+    return true;
+  }
+  entry.count += 1;
+  return entry.count <= RATE_LIMIT_MAX_REQUESTS;
+};
+
+// Clean up old entries periodically
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, entry] of rateLimitMap) {
+    if (now - entry.timestamp > RATE_LIMIT_WINDOW_MS * 2) rateLimitMap.delete(ip);
+  }
+}, RATE_LIMIT_WINDOW_MS).unref();
+
+const ELEVATION_CACHE_MAX = Number(process.env.ELEVATION_CACHE_MAX ?? 50_000);
 const elevationCache = new Map();
 
+const elevationCacheGet = (key) => {
+  if (!elevationCache.has(key)) return undefined;
+  const value = elevationCache.get(key);
+  // Move to end (most recently used)
+  elevationCache.delete(key);
+  elevationCache.set(key, value);
+  return value;
+};
+
+const elevationCacheSet = (key, value) => {
+  if (elevationCache.size >= ELEVATION_CACHE_MAX) {
+    // Delete oldest entry (first in Map)
+    const firstKey = elevationCache.keys().next().value;
+    elevationCache.delete(firstKey);
+  }
+  elevationCache.set(key, value);
+};
+
 const nativeItmAvailable = () => existsSync(ITM_RUNNER);
-const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const toNumber = (value, fallback = 0) => {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -64,29 +113,6 @@ const getDestinationPoint = (lat, lon, bearingDeg, distanceKm) => {
     Math.cos(angularDistance) - Math.sin(lat1) * Math.sin(lat2),
   );
   return [radiansToDegrees(lat2), ((radiansToDegrees(lon2) + 540) % 360) - 180];
-};
-const calculateTwoRayLoss = ({ frequencyMhz, distanceKm, txHeightM, rxHeightM }) => {
-  if (distanceKm <= 0) return 0;
-  const wavelengthM = 300 / clamp(frequencyMhz, 20, ITM_MAX_FREQ_MHZ);
-  const breakpointKm = Math.max(0.1, (4 * Math.max(0.5, txHeightM) * Math.max(0.5, rxHeightM)) / wavelengthM / 1000);
-  if (distanceKm <= breakpointKm) return 0;
-  return clamp(6 * Math.log10(distanceKm / breakpointKm), 0, 18);
-};
-const calculateAtmosphericLoss = (frequencyMhz, distanceKm, lossDbPerKm) => {
-  if (frequencyMhz < 3000 || distanceKm <= 0) return 0;
-  const ghz = frequencyMhz / 1000;
-  const oxygenWaterLossDbPerKm = clamp(lossDbPerKm, 0, 1) + (
-    ghz > 10 ? (ghz - 10) * 0.002 : 0
-  );
-  return clamp(oxygenWaterLossDbPerKm * distanceKm, 0, 20);
-};
-const calculateShfRainLoss = (frequencyMhz, distanceKm, rainRateMmH) => {
-  if (frequencyMhz < 3000 || rainRateMmH <= 0 || distanceKm <= 0) return 0;
-  const ghz = frequencyMhz / 1000;
-  const k = clamp(0.00012 * (ghz ** 1.35), 0, 2.5);
-  const alpha = clamp(0.82 + 0.03 * Math.log10(Math.max(1, ghz)), 0.75, 1.15);
-  const effectiveDistanceKm = distanceKm / (1 + distanceKm / 35);
-  return clamp(k * (rainRateMmH ** alpha) * effectiveDistanceKm, 0, 45);
 };
 
 const sendJson = (res, status, payload) => {
@@ -163,8 +189,9 @@ const fetchElevationBatch = async (points) => {
 
   points.forEach(([lat, lon], index) => {
     const cacheKey = getElevationCacheKey(lat, lon);
-    if (elevationCache.has(cacheKey)) {
-      elevations[index] = elevationCache.get(cacheKey);
+    const cached = elevationCacheGet(cacheKey);
+    if (cached !== undefined) {
+      elevations[index] = cached;
       return;
     }
 
@@ -177,49 +204,11 @@ const fetchElevationBatch = async (points) => {
     chunkElevations.forEach((elevation, elevationIndex) => {
       const request = chunk[elevationIndex];
       elevations[request.index] = elevation;
-      if (typeof elevation === 'number') elevationCache.set(request.cacheKey, elevation);
+      if (typeof elevation === 'number') elevationCacheSet(request.cacheKey, elevation);
     });
   }
 
   return elevations;
-};
-
-const interpolateElevation = (samples, distanceKm, siteElevationM) => {
-  if (!samples.length || distanceKm <= 0) return siteElevationM;
-  if (distanceKm <= samples[0].distanceKm) {
-    const ratio = clamp(distanceKm / Math.max(0.001, samples[0].distanceKm), 0, 1);
-    return siteElevationM + (samples[0].elevation - siteElevationM) * ratio;
-  }
-
-  for (let index = 1; index < samples.length; index += 1) {
-    const previous = samples[index - 1];
-    const next = samples[index];
-    if (distanceKm > next.distanceKm) continue;
-    const ratio = (distanceKm - previous.distanceKm) / Math.max(1e-9, next.distanceKm - previous.distanceKm);
-    return previous.elevation + (next.elevation - previous.elevation) * clamp(ratio, 0, 1);
-  }
-
-  return samples[samples.length - 1].elevation;
-};
-
-const calculateFreeSpaceLoss = (frequencyMhz, distanceKm) => (
-  32.44 + 20 * Math.log10(Math.max(0.001, distanceKm)) + 20 * Math.log10(clamp(frequencyMhz, 20, 30000))
-);
-
-const calculateFallbackItmStyleLoss = ({ frequencyMhz, txHeightM, rxHeightM, siteElevationM, radialSamples, distanceKm }) => {
-  const samplesInPath = radialSamples.filter((sample) => sample.distanceKm <= distanceKm);
-  const elevations = samplesInPath.length ? samplesInPath.map((sample) => sample.elevation) : [siteElevationM];
-  const avgElevation = elevations.reduce((total, elevation) => total + elevation, 0) / elevations.length;
-  const minElevation = Math.min(...elevations);
-  const maxElevation = Math.max(...elevations);
-  const roughness = maxElevation - minElevation;
-  const sitePenalty = Math.max(0, avgElevation - siteElevationM) * 0.05;
-  const roughnessLoss = clamp(roughness * 0.035 + sitePenalty, 0, 28);
-  const horizonKm = 4.12 * (Math.sqrt(Math.max(1, txHeightM)) + Math.sqrt(Math.max(1, rxHeightM)));
-  const horizonLoss = distanceKm > horizonKm ? clamp((distanceKm - horizonKm) * 0.42, 0, 32) : 0;
-  const rxElevation = interpolateElevation(radialSamples, distanceKm, siteElevationM);
-  const terminalDelta = Math.max(0, rxElevation - siteElevationM) * 0.03;
-  return calculateFreeSpaceLoss(frequencyMhz, distanceKm) + roughnessLoss + horizonLoss + terminalDelta;
 };
 
 const normalizeRequest = (payload) => {
@@ -290,14 +279,14 @@ const normalizeRasterRequest = (payload) => {
   };
 };
 
-const runNativeItm = (input) => {
+const runNativeItm = (input) => new Promise((resolve, reject) => {
   const profile = [
     `0:${input.siteElevationM}`,
     ...input.radialSamples.map((sample) => `${sample.distanceKm}:${sample.elevation}`),
   ].join(',');
   const distances = input.distancesKm.join(',');
 
-  const result = spawnSync(ITM_RUNNER, [
+  const child = spawn(ITM_RUNNER, [
     '--frequency-mhz', String(input.frequencyMhz),
     '--tx-height-m', String(input.txHeightM),
     '--rx-height-m', String(input.rxHeightM),
@@ -310,24 +299,47 @@ const runNativeItm = (input) => {
     '--reliability', String(input.reliability),
     '--profile', profile,
     '--distances-km', distances,
-  ], {
-    encoding: 'utf8',
-    timeout: 15000,
-    maxBuffer: 1024 * 1024,
+  ]);
+
+  let stdout = '';
+  let stderr = '';
+  let timedOut = false;
+
+  const timeoutId = setTimeout(() => {
+    timedOut = true;
+    child.kill('SIGKILL');
+  }, 15000);
+
+  child.stdout.on('data', (chunk) => { stdout += chunk; });
+  child.stderr.on('data', (chunk) => { stderr += chunk; });
+
+  child.on('close', (code) => {
+    clearTimeout(timeoutId);
+    if (timedOut) {
+      reject(new Error('ITM runner timed out after 15s'));
+      return;
+    }
+    if (code !== 0) {
+      reject(new Error(stderr || `ITM runner exited with status ${code}`));
+      return;
+    }
+    try {
+      resolve(JSON.parse(stdout));
+    } catch (error) {
+      reject(new Error(`ITM runner produced invalid JSON: ${error.message}`));
+    }
   });
 
-  if (result.error) throw result.error;
-  if (result.status !== 0) {
-    throw new Error(result.stderr || `ITM runner exited with status ${result.status}`);
-  }
+  child.on('error', (error) => {
+    clearTimeout(timeoutId);
+    reject(error);
+  });
+});
 
-  return JSON.parse(result.stdout);
-};
-
-const calculateRadial = (input) => {
+const calculateRadial = async (input) => {
   if (nativeItmAvailable() && input.frequencyMhz <= ITM_MAX_FREQ_MHZ) {
     try {
-      const nativeResult = runNativeItm(input);
+      const nativeResult = await runNativeItm(input);
       return {
         engine: 'ntia-itm-native',
         nativeItm: true,
@@ -436,7 +448,7 @@ const calculateRasterCell = async ({ cell, input, siteElevationM }) => {
   };
 
   const result = cell.distanceKm >= ITM_MIN_DISTANCE_KM
-    ? calculateRadial(itmInput)
+    ? await calculateRadial(itmInput)
     : {
       engine: 'server-fallback-itm-style',
       nativeItm: false,
@@ -452,10 +464,10 @@ const calculateRasterCell = async ({ cell, input, siteElevationM }) => {
     calculateShfRainLoss(input.frequencyMhz, cell.distanceKm, input.rainRateMmH) +
     calculateAtmosphericLoss(input.frequencyMhz, cell.distanceKm, input.atmosphericLossDbPerKm) +
     (input.useTwoRay ? calculateTwoRayLoss({
-      frequencyMhz: input.frequencyMhz,
+      freq: input.frequencyMhz,
       distanceKm: cell.distanceKm,
-      txHeightM: input.txHeightM,
-      rxHeightM: input.rxHeightM,
+      hTx: input.txHeightM,
+      hRx: input.rxHeightM,
     }) : 0);
   const pathLossDb = itmLossDb + externalLossDb;
   const rxDbm = input.txPowerDbm +
@@ -561,14 +573,37 @@ const calculateRasterCoverage = async (input) => {
   };
 };
 
+const logRequest = (req, res, requestId, startTime) => {
+  const duration = Date.now() - startTime;
+  console.log(JSON.stringify({
+    requestId,
+    method: req.method,
+    url: req.url,
+    status: res.statusCode,
+    durationMs: duration,
+    ip: req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket.remoteAddress,
+  }));
+};
+
 const server = http.createServer(async (req, res) => {
+  const requestId = randomUUID().slice(0, 8);
+  const startTime = Date.now();
+  res.on('finish', () => logRequest(req, res, requestId, startTime));
+
   if (req.method === 'OPTIONS') {
     sendJson(res, 204, {});
     return;
   }
 
-  if (req.method === 'GET' && req.url === '/health') {
-    sendJson(res, 200, {
+  const clientIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket.remoteAddress;
+  if (!checkRateLimit(clientIp)) {
+    sendJson(res, 429, { error: 'Rate limit exceeded. Please slow down.' });
+    return;
+  }
+
+  if (req.method === 'GET' && req.url.startsWith('/health')) {
+    const isDeep = req.url.includes('deep=true');
+    const baseResponse = {
       ok: true,
       service: '9m2pju-itm-api',
       engine: nativeItmAvailable() ? 'ntia-itm-native' : 'server-fallback-itm-style',
@@ -581,7 +616,43 @@ const server = http.createServer(async (req, res) => {
         defaultCellKm: RASTER_DEFAULT_CELL_KM,
         elevationApi: Boolean(OPEN_ELEVATION_API_URL),
       },
-    });
+    };
+
+    if (!isDeep || !nativeItmAvailable()) {
+      sendJson(res, 200, baseResponse);
+      return;
+    }
+
+    try {
+      const testResult = await runNativeItm({
+        frequencyMhz: 145,
+        txHeightM: 10,
+        rxHeightM: 1.5,
+        siteElevationM: 100,
+        radialSamples: [{ distanceKm: 1, elevation: 100 }, { distanceKm: 5, elevation: 110 }],
+        distancesKm: [1, 5],
+        confidence: 50,
+        reliability: 50,
+        climate: 1,
+        polarization: 1,
+        groundPermittivity: 15,
+        groundConductivity: 0.005,
+        surfaceRefractivity: 301,
+      });
+      sendJson(res, 200, {
+        ...baseResponse,
+        deepCheck: {
+          ok: true,
+          testLoss: testResult.losses?.[0]?.lossDb,
+          testWarnings: testResult.losses?.[0]?.warnings,
+        },
+      });
+    } catch (error) {
+      sendJson(res, 200, {
+        ...baseResponse,
+        deepCheck: { ok: false, error: error.message },
+      });
+    }
     return;
   }
 
@@ -596,7 +667,7 @@ const server = http.createServer(async (req, res) => {
 
       sendJson(res, 200, {
         ok: true,
-        ...calculateRadial(input),
+        ...(await calculateRadial(input)),
       });
     } catch (error) {
       sendJson(res, 400, { error: error.message });

@@ -1,8 +1,24 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { MapContainer, TileLayer, Marker, useMap, useMapEvents, Popup, Polygon, LayersControl, ZoomControl, CircleMarker } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
-import { Radio, Activity, Layers, Zap, Mountain, BarChart3, Plus, Trash2, Antenna, Info, X, Upload, Download, FileText, Crosshair, MapPin, Share2, Clipboard } from 'lucide-react';
+import { Radio, Activity, Layers, Zap, Mountain, BarChart3, Plus, Trash2, Antenna, Info, X, Upload, Download, FileText, Crosshair, MapPin, Share2, Clipboard, Sun, Moon } from 'lucide-react';
 import L from 'leaflet';
+
+import {
+  clamp,
+  microvoltsToDbm,
+  dbmToMicrovolts,
+  calculateNoiseFloorDbm,
+  calculateRequiredSignalDbm,
+  calculateEffectiveTxHeight,
+  calculateRadialHaat,
+  calculateExternalLosses as sharedCalculateExternalLosses,
+  calculateTotalPathLoss as sharedCalculateTotalPathLoss,
+  findReliableDistance as sharedFindReliableDistance,
+  findReliableDistanceFromLossMap as sharedFindReliableDistanceFromLossMap,
+  createItmDistanceGrid,
+  getItmApiPathLoss,
+} from './rf/propagation';
 
 import icon from 'leaflet/dist/images/marker-icon.png';
 import iconShadow from 'leaflet/dist/images/marker-shadow.png';
@@ -531,7 +547,6 @@ const calculateAreaKm2 = (points) => {
   return Math.abs(area) / 2;
 };
 
-const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const getBandKeyForFrequency = (frequencyMhz) => (
   BAND_OPTIONS.find((band) => frequencyMhz >= band.min && frequencyMhz <= band.max)?.key ??
   (frequencyMhz < 300 ? 'vhf' : frequencyMhz < 3000 ? 'uhf' : 'shf')
@@ -547,20 +562,6 @@ const toNumber = (value, fallback = 0) => {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
 };
-const microvoltsToDbm = (microvolts, impedanceOhms = 50) => {
-  const volts = Math.max(0.001, microvolts) * 1e-6;
-  return 10 * Math.log10(((volts ** 2) / impedanceOhms) * 1000);
-};
-const dbmToMicrovolts = (dbm, impedanceOhms = 50) => {
-  const watts = 10 ** ((dbm - 30) / 10);
-  return Math.sqrt(watts * impedanceOhms) * 1e6;
-};
-const calculateNoiseFloorDbm = (bandwidthHz, noiseFigureDb = 6) => (
-  -174 + 10 * Math.log10(Math.max(1, bandwidthHz)) + noiseFigureDb
-);
-const calculateRequiredSignalDbm = ({ bandwidthHz, noiseFigureDb, requiredSnrDb }) => (
-  calculateNoiseFloorDbm(bandwidthHz, noiseFigureDb) + requiredSnrDb
-);
 
 const haversineDistanceKm = ([lat1, lon1], [lat2, lon2]) => {
   const R = 6371;
@@ -888,113 +889,6 @@ const captureMapSnapshot = async ({ map, sites, serviceGrades, coverageRenderMod
   }
 };
 
-const calculateFreeSpacePathLoss = (freq, distanceKm) => (
-  32.44 + 20 * Math.log10(Math.max(0.001, distanceKm)) + 20 * Math.log10(clamp(freq, MIN_FREQUENCY_MHZ, MAX_FREQUENCY_MHZ))
-);
-
-const calculateHataMobileCorrection = (freq, hRx) => {
-  const logFreq = Math.log10(freq);
-  return (1.1 * logFreq - 0.7) * hRx - (1.56 * logFreq - 0.8);
-};
-
-const calculateHataSuburbanPathLoss = (freq, effectiveHTx, hRx, distanceKm) => {
-  const logFreq = Math.log10(freq);
-  const logHTx = Math.log10(clamp(effectiveHTx, 30, 200));
-  const safeHRx = clamp(hRx, 1, 10);
-  const mobileCorrection = calculateHataMobileCorrection(freq, safeHRx);
-  const logDist = Math.log10(Math.max(1, distanceKm));
-  const urbanLoss = 69.55 + 26.16 * logFreq - 13.82 * logHTx - mobileCorrection + (44.9 - 6.55 * logHTx) * logDist;
-  const suburbanCorrection = 2 * (Math.log10(freq / 28) ** 2) + 5.4;
-
-  return urbanLoss - suburbanCorrection;
-};
-
-const calculateCost231SuburbanPathLoss = (freq, effectiveHTx, hRx, distanceKm) => {
-  const logFreq = Math.log10(freq);
-  const logHTx = Math.log10(clamp(effectiveHTx, 30, 200));
-  const safeHRx = clamp(hRx, 1, 10);
-  const mobileCorrection = calculateHataMobileCorrection(freq, safeHRx);
-  const logDist = Math.log10(Math.max(1, distanceKm));
-
-  return 46.3 + 33.9 * logFreq - 13.82 * logHTx - mobileCorrection + (44.9 - 6.55 * logHTx) * logDist;
-};
-
-const calculateShfExcessLoss = (freq, distanceKm) => {
-  const safeFreq = clamp(freq, 3000, MAX_FREQUENCY_MHZ);
-  const frequencyFactor = clamp((safeFreq - 3000) / (MAX_FREQUENCY_MHZ - 3000), 0, 1);
-  return 3 + frequencyFactor * 9 + clamp(distanceKm * 0.02, 0, 8);
-};
-
-const calculateShfRainLoss = (freq, distanceKm, rainRateMmH) => {
-  if (freq < 3000 || rainRateMmH <= 0 || distanceKm <= 0) return 0;
-  const freqGhz = freq / 1000;
-  const k = clamp(0.00012 * (freqGhz ** 1.35), 0, 2.5);
-  const alpha = clamp(0.82 + 0.03 * Math.log10(Math.max(1, freqGhz)), 0.75, 1.15);
-  const effectiveDistanceKm = distanceKm / (1 + distanceKm / 35);
-  return clamp(k * (rainRateMmH ** alpha) * effectiveDistanceKm, 0, 45);
-};
-
-const calculateAtmosphericLoss = (freq, distanceKm, atmosphericLossDbPerKm) => {
-  if (freq < 3000 || distanceKm <= 0) return 0;
-  const freqGhz = freq / 1000;
-  const oxygenWaterLossDbPerKm = atmosphericLossDbPerKm + (
-    freqGhz > 10 ? (freqGhz - 10) * 0.002 : 0
-  );
-  return clamp(oxygenWaterLossDbPerKm * distanceKm, 0, 20);
-};
-
-const calculateTwoRayLoss = ({ freq, distanceKm, hTx, hRx }) => {
-  if (distanceKm <= 0) return 0;
-  const wavelengthM = 300 / clamp(freq, MIN_FREQUENCY_MHZ, MAX_FREQUENCY_MHZ);
-  const breakpointKm = Math.max(0.1, (4 * Math.max(0.5, hTx) * Math.max(0.5, hRx)) / wavelengthM / 1000);
-  if (distanceKm <= breakpointKm) return 0;
-  return clamp(6 * Math.log10(distanceKm / breakpointKm), 0, 18);
-};
-
-const calculatePathLoss = (freq, effectiveHTx, hRx, distanceKm) => {
-  const safeFreq = clamp(freq, MIN_FREQUENCY_MHZ, MAX_FREQUENCY_MHZ);
-  const safeDistanceKm = Math.max(0.001, distanceKm);
-  const freeSpaceLoss = calculateFreeSpacePathLoss(safeFreq, safeDistanceKm);
-
-  if (safeFreq > 3000) {
-    return freeSpaceLoss + calculateShfExcessLoss(safeFreq, safeDistanceKm);
-  }
-
-  const hataFreq = clamp(safeFreq, 150, 1500);
-  const hataLoss = calculateHataSuburbanPathLoss(hataFreq, effectiveHTx, hRx, safeDistanceKm);
-
-  if (safeFreq <= 1500) {
-    return Math.max(freeSpaceLoss, hataLoss);
-  }
-
-  const costFreq = clamp(safeFreq, 1500, 2000);
-  const costLoss = calculateCost231SuburbanPathLoss(costFreq, effectiveHTx, hRx, safeDistanceKm);
-  const highUhfExtension = safeFreq > 2000 ? (safeFreq - 2000) / 1000 * 5 : 0;
-
-  return Math.max(freeSpaceLoss, costLoss + highUhfExtension);
-};
-
-const calculateTerrainRoughness = (radialSamples, siteElevation) => {
-  if (!radialSamples.length) return 0;
-  const elevations = radialSamples.map((sample) => sample.elevation);
-  const average = elevations.reduce((total, elevation) => total + elevation, 0) / elevations.length;
-  const variance = elevations.reduce((total, elevation) => total + ((elevation - average) ** 2), 0) / elevations.length;
-  const slope = Math.max(...elevations) - Math.min(...elevations);
-  const siteDelta = Math.max(0, average - siteElevation);
-  return Math.sqrt(variance) * 0.18 + slope * 0.035 + siteDelta * 0.05;
-};
-
-const calculateItmStylePathLoss = ({ freq, effectiveHTx, hRx, distanceKm, radialSamples, siteElevation }) => {
-  const fspl = calculateFreeSpacePathLoss(freq, distanceKm);
-  const hata = calculatePathLoss(freq, effectiveHTx, hRx, distanceKm);
-  const roughnessLoss = clamp(calculateTerrainRoughness(radialSamples, siteElevation), 0, 24);
-  const radioHorizonKm = 4.12 * (Math.sqrt(Math.max(1, effectiveHTx)) + Math.sqrt(Math.max(1, hRx)));
-  const horizonLoss = distanceKm > radioHorizonKm ? clamp((distanceKm - radioHorizonKm) * 0.38, 0, 28) : 0;
-  const transitionWeight = clamp((distanceKm - 8) / 40, 0, 1);
-
-  return Math.max(fspl + roughnessLoss + horizonLoss, (hata * (1 - transitionWeight)) + ((fspl + roughnessLoss + horizonLoss) * transitionWeight));
-};
-
 const getModelReliability = ({ freq, hTx, hRx, propagationModel, fadeMargin }) => {
   const notes = [];
   let penalty = 0;
@@ -1050,104 +944,6 @@ const getModelReliability = ({ freq, hTx, hRx, propagationModel, fadeMargin }) =
   };
 };
 
-const getElevationAtDistance = (radialSamples, distanceKm, fallbackElevation) => {
-  if (!radialSamples.length || distanceKm <= 0) return fallbackElevation;
-
-  const firstSample = radialSamples[0];
-  if (distanceKm <= firstSample.distanceKm) {
-    const ratio = clamp(distanceKm / firstSample.distanceKm, 0, 1);
-    return fallbackElevation + (firstSample.elevation - fallbackElevation) * ratio;
-  }
-
-  for (let index = 1; index < radialSamples.length; index++) {
-    const previous = radialSamples[index - 1];
-    const next = radialSamples[index];
-    if (distanceKm > next.distanceKm) continue;
-
-    const ratio = (distanceKm - previous.distanceKm) / (next.distanceKm - previous.distanceKm);
-    return previous.elevation + (next.elevation - previous.elevation) * clamp(ratio, 0, 1);
-  }
-
-  return radialSamples[radialSamples.length - 1].elevation;
-};
-
-const getTerrainCheckDistances = (radialSamples, radiusKm) => {
-  const distances = new Set();
-
-  for (let distanceKm = TERRAIN_PROFILE_STEP_KM; distanceKm < radiusKm; distanceKm += TERRAIN_PROFILE_STEP_KM) {
-    distances.add(Number(distanceKm.toFixed(3)));
-  }
-
-  radialSamples.forEach((sample) => {
-    if (sample.distanceKm > 0 && sample.distanceKm < radiusKm) {
-      distances.add(Number(sample.distanceKm.toFixed(3)));
-    }
-  });
-
-  return [...distances].sort((a, b) => a - b);
-};
-
-const calculateTerrainPenalty = (radialSamples, radiusKm, siteElevation, hTx, hRx, freq) => {
-  const wavelength = 300 / freq;
-  const txAmsl = siteElevation + hTx;
-  const rxGround = getElevationAtDistance(radialSamples, radiusKm, siteElevation);
-  const rxAmsl = rxGround + hRx;
-
-  let maxDiffractionLoss = 0;
-  let shadowedSamples = 0;
-
-  getTerrainCheckDistances(radialSamples, radiusKm).forEach((distanceKm) => {
-    const pathFraction = distanceKm / radiusKm;
-    const lineOfSightHeight = txAmsl + (rxAmsl - txAmsl) * pathFraction;
-    const firstFresnelRadius = 548 * Math.sqrt((distanceKm * (radiusKm - distanceKm)) / (freq * radiusKm));
-    const earthBulge = (distanceKm * (radiusKm - distanceKm) * 1000) / (2 * EFFECTIVE_EARTH_RADIUS_KM);
-    const terrainElevation = getElevationAtDistance(radialSamples, distanceKm, siteElevation);
-    const clearanceDeficit = (terrainElevation + earthBulge) - (lineOfSightHeight - 0.6 * firstFresnelRadius);
-
-    if (clearanceDeficit <= 0) return;
-
-    shadowedSamples += 1;
-    const d1 = Math.max(1, distanceKm * 1000);
-    const d2 = Math.max(1, (radiusKm - distanceKm) * 1000);
-    const v = clearanceDeficit * Math.sqrt((2 * (d1 + d2)) / (wavelength * d1 * d2));
-    const diffractionLoss = v <= -0.78 ? 0 : 6.9 + 20 * Math.log10(Math.sqrt((v - 0.1) ** 2 + 1) + v - 0.1);
-    maxDiffractionLoss = Math.max(maxDiffractionLoss, diffractionLoss);
-  });
-
-  if (shadowedSamples === 0) return 0;
-
-  return clamp(maxDiffractionLoss + shadowedSamples * 1.5, 0, 38);
-};
-
-const calculateModelPathLoss = ({ modelKey, freq, effectiveHTx, hRx, distanceKm, radialSamples, siteElevation }) => {
-  if (modelKey === 'itmHybrid' || modelKey === 'ntiaItmApi') {
-    return calculateItmStylePathLoss({ freq, effectiveHTx, hRx, distanceKm, radialSamples, siteElevation });
-  }
-
-  return calculatePathLoss(freq, effectiveHTx, hRx, distanceKm);
-};
-
-const calculateEffectiveTxHeight = (siteElevation, hTx, radialSamples) => {
-  if (!radialSamples.length) return clamp(hTx, 2, 300);
-  const haatSamples = radialSamples.filter((sample) => (
-    sample.distanceKm >= HAAT_MIN_DISTANCE_KM && sample.distanceKm <= HAAT_MAX_DISTANCE_KM
-  ));
-  const terrainSamples = haatSamples.length ? haatSamples : radialSamples;
-  const avgElevation = terrainSamples.reduce((total, sample) => total + sample.elevation, 0) / terrainSamples.length;
-  const haat = (siteElevation + hTx) - avgElevation;
-  return clamp(Math.max(hTx, haat), 2, 300);
-};
-
-const calculateRadialHaat = (siteElevation, hTx, radialSamples) => {
-  const haatSamples = radialSamples.filter((sample) => (
-    sample.distanceKm >= HAAT_MIN_DISTANCE_KM && sample.distanceKm <= HAAT_MAX_DISTANCE_KM
-  ));
-  const terrainSamples = haatSamples.length ? haatSamples : radialSamples;
-  if (!terrainSamples.length) return hTx;
-  const avgElevation = terrainSamples.reduce((total, sample) => total + sample.elevation, 0) / terrainSamples.length;
-  return (siteElevation + hTx) - avgElevation;
-};
-
 const calculateMappedClutterLoss = ({ sitePosition, bearing, distanceKm, clutterMap }) => {
   if (!clutterMap?.features?.length || distanceKm <= 0) return 0;
   let sampledLoss = 0;
@@ -1168,142 +964,21 @@ const calculateMappedClutterLoss = ({ sitePosition, bearing, distanceKm, clutter
   return clamp((sampledLoss / samples) * clamp(distanceKm / 20, 0.25, 1), 0, 24);
 };
 
-const calculateTotalPathLoss = ({
-  modelKey,
-  freq,
-  effectiveHTx,
-  hTx,
-  hRx,
-  distanceKm,
-  radialSamples,
-  siteElevation,
-  clutterLossDb,
-  terrainPenaltyCache,
-  sitePosition,
-  bearing,
-  clutterMap,
-  rainRateMmH,
-  atmosphericLossDbPerKm,
-  useTwoRay,
-}) => {
-  const cacheKey = distanceKm.toFixed(3);
-  let terrainPenalty = terrainPenaltyCache?.get(cacheKey);
-
-  if (typeof terrainPenalty !== 'number') {
-    terrainPenalty = calculateTerrainPenalty(radialSamples, distanceKm, siteElevation, hTx, hRx, freq);
-    terrainPenaltyCache?.set(cacheKey, terrainPenalty);
-  }
-
-  return calculateModelPathLoss({ modelKey, freq, effectiveHTx, hRx, distanceKm, radialSamples, siteElevation }) +
-    terrainPenalty +
-    clutterLossDb +
-    calculateMappedClutterLoss({ sitePosition, bearing, distanceKm, clutterMap }) +
-    calculateShfRainLoss(freq, distanceKm, rainRateMmH) +
-    calculateAtmosphericLoss(freq, distanceKm, atmosphericLossDbPerKm) +
-    (useTwoRay ? calculateTwoRayLoss({ freq, distanceKm, hTx, hRx }) : 0);
+// Wrapper that adds mapped clutter loss to the shared module's calculateTotalPathLoss
+const makeClutterMapExtraLossFn = (sitePosition, bearing, clutterMap) => {
+  if (!clutterMap?.features?.length) return undefined;
+  return (distanceKm) => calculateMappedClutterLoss({ sitePosition, bearing, distanceKm, clutterMap });
 };
 
-const findReliableDistance = ({
-  modelKey,
-  freq,
-  effectiveHTx,
-  hTx,
-  hRx,
-  targetLoss,
-  radialSamples,
-  siteElevation,
-  clutterLossDb,
-  terrainPenaltyCache,
-  sitePosition,
-  bearing,
-  clutterMap,
-  rainRateMmH,
-  atmosphericLossDbPerKm,
-  useTwoRay,
-  maxRangeKm = MAX_PREDICTION_RANGE_KM,
-}) => {
-  const searchDistances = RELIABILITY_CHECK_DISTANCES_KM.filter((distanceKm) => distanceKm <= maxRangeKm);
-  let low = RELIABILITY_CHECK_DISTANCES_KM[0];
-  let high = maxRangeKm;
+const calculateTotalPathLoss = (params) => sharedCalculateTotalPathLoss({
+  ...params,
+  extraLossFn: makeClutterMapExtraLossFn(params.sitePosition, params.bearing, params.clutterMap),
+});
 
-  if (calculateTotalPathLoss({
-    modelKey,
-    freq,
-    effectiveHTx,
-    hTx,
-    hRx,
-    distanceKm: low,
-    radialSamples,
-    siteElevation,
-    clutterLossDb,
-    terrainPenaltyCache,
-    sitePosition,
-    bearing,
-    clutterMap,
-    rainRateMmH,
-    atmosphericLossDbPerKm,
-    useTwoRay,
-  }) > targetLoss) {
-    return 0;
-  }
-
-  for (const distanceKm of searchDistances.slice(1)) {
-    const totalLoss = calculateTotalPathLoss({
-      modelKey,
-      freq,
-      effectiveHTx,
-      hTx,
-      hRx,
-      distanceKm,
-      radialSamples,
-      siteElevation,
-      clutterLossDb,
-      terrainPenaltyCache,
-      sitePosition,
-      bearing,
-      clutterMap,
-      rainRateMmH,
-      atmosphericLossDbPerKm,
-      useTwoRay,
-    });
-
-    if (totalLoss > targetLoss) {
-      high = distanceKm;
-      break;
-    }
-
-    low = distanceKm;
-  }
-
-  if (low === high) return low;
-
-  for (let i = 0; i < PREDICTION_SEARCH_ITERATIONS; i++) {
-    const mid = (low + high) / 2;
-    const totalLoss = calculateTotalPathLoss({
-      modelKey,
-      freq,
-      effectiveHTx,
-      hTx,
-      hRx,
-      distanceKm: mid,
-      radialSamples,
-      siteElevation,
-      clutterLossDb,
-      terrainPenaltyCache,
-      sitePosition,
-      bearing,
-      clutterMap,
-      rainRateMmH,
-      atmosphericLossDbPerKm,
-      useTwoRay,
-    });
-
-    if (totalLoss < targetLoss) low = mid;
-    else high = mid;
-  }
-
-  return low;
-};
+const findReliableDistance = (params) => sharedFindReliableDistance({
+  ...params,
+  extraLossFn: makeClutterMapExtraLossFn(params.sitePosition, params.bearing, params.clutterMap),
+});
 
 const getPredictedSignalForPoint = ({
   receiverPoint,
@@ -1337,18 +1012,16 @@ const getPredictedSignalForPoint = ({
     ? getItmApiPathLoss(itmRadialLosses?.[radialIndex], distanceKm)
     : null;
   const pathLoss = typeof itmPathLoss === 'number'
-    ? itmPathLoss + calculateExternalLosses({
+    ? itmPathLoss + sharedCalculateExternalLosses({
       freq,
       distanceKm,
       hTx,
       hRx,
       clutterLossDb,
-      sitePosition: site.position,
-      bearing,
-      clutterMap,
       rainRateMmH,
       atmosphericLossDbPerKm,
       useTwoRay,
+      extraLossFn: makeClutterMapExtraLossFn(site.position, bearing, clutterMap),
     })
     : calculateTotalPathLoss({
       modelKey,
@@ -1396,16 +1069,13 @@ const fetchWithTimeout = async (url, options = {}, timeoutMs = ELEVATION_TIMEOUT
   }
 };
 
-const createItmDistanceGrid = (maxRangeKm = MAX_PREDICTION_RANGE_KM) => {
-  const cappedRangeKm = Math.max(ITM_API_MIN_DISTANCE_KM, maxRangeKm);
-  const distances = new Set([ITM_API_MIN_DISTANCE_KM, cappedRangeKm]);
-  for (let distanceKm = ITM_API_MIN_DISTANCE_KM + ITM_API_DISTANCE_STEP_KM; distanceKm <= cappedRangeKm; distanceKm += ITM_API_DISTANCE_STEP_KM) {
-    distances.add(Number(distanceKm.toFixed(3)));
-  }
+const createItmDistanceGridWithSampling = (maxRangeKm = MAX_PREDICTION_RANGE_KM) => {
+  const baseGrid = createItmDistanceGrid(maxRangeKm);
+  const distances = new Set(baseGrid);
   SAMPLING_INTERVALS_KM.forEach((distanceKm) => {
-    if (distanceKm >= ITM_API_MIN_DISTANCE_KM && distanceKm <= cappedRangeKm) distances.add(distanceKm);
+    if (distanceKm >= ITM_API_MIN_DISTANCE_KM && distanceKm <= maxRangeKm) distances.add(distanceKm);
   });
-  return [...distances].filter((distanceKm) => distanceKm >= ITM_API_MIN_DISTANCE_KM && distanceKm <= cappedRangeKm).sort((a, b) => a - b);
+  return [...distances].sort((a, b) => a - b);
 };
 
 const fetchItmRadialLosses = async ({
@@ -1511,102 +1181,11 @@ const fetchPerCellRasterCoverage = async ({
   return data;
 };
 
-const getItmApiPathLoss = (itmLossMap, distanceKm) => {
-  if (!itmLossMap?.length) return null;
-  if (distanceKm < itmLossMap[0].distanceKm) return null;
-  if (distanceKm <= itmLossMap[0].distanceKm) return itmLossMap[0].lossDb;
-
-  for (let index = 1; index < itmLossMap.length; index++) {
-    const previous = itmLossMap[index - 1];
-    const next = itmLossMap[index];
-    if (distanceKm > next.distanceKm) continue;
-
-    const ratio = (distanceKm - previous.distanceKm) / Math.max(1e-9, next.distanceKm - previous.distanceKm);
-    return previous.lossDb + (next.lossDb - previous.lossDb) * clamp(ratio, 0, 1);
-  }
-
-  return itmLossMap[itmLossMap.length - 1].lossDb;
-};
-
-const calculateExternalLosses = ({
-  freq,
-  distanceKm,
-  hTx,
-  hRx,
-  clutterLossDb,
-  sitePosition,
-  bearing,
-  clutterMap,
-  rainRateMmH,
-  atmosphericLossDbPerKm,
-  useTwoRay,
-}) => (
-  clutterLossDb +
-  calculateMappedClutterLoss({ sitePosition, bearing, distanceKm, clutterMap }) +
-  calculateShfRainLoss(freq, distanceKm, rainRateMmH) +
-  calculateAtmosphericLoss(freq, distanceKm, atmosphericLossDbPerKm) +
-  (useTwoRay ? calculateTwoRayLoss({ freq, distanceKm, hTx, hRx }) : 0)
-);
-
-const findReliableDistanceFromLossMap = ({
-  itmLossMap,
-  freq,
-  hTx,
-  hRx,
-  targetLoss,
-  clutterLossDb,
-  sitePosition,
-  bearing,
-  clutterMap,
-  rainRateMmH,
-  atmosphericLossDbPerKm,
-  useTwoRay,
-}) => {
-  if (!itmLossMap?.length) return null;
-  let lastPassing = itmLossMap[0].distanceKm;
-  let lastLoss = itmLossMap[0].lossDb + calculateExternalLosses({
-    freq,
-    distanceKm: itmLossMap[0].distanceKm,
-    hTx,
-    hRx,
-    clutterLossDb,
-    sitePosition,
-    bearing,
-    clutterMap,
-    rainRateMmH,
-    atmosphericLossDbPerKm,
-    useTwoRay,
-  });
-
-  if (lastLoss > targetLoss) return null;
-
-  for (let index = 1; index < itmLossMap.length; index++) {
-    const sample = itmLossMap[index];
-    const totalLoss = sample.lossDb + calculateExternalLosses({
-      freq,
-      distanceKm: sample.distanceKm,
-      hTx,
-      hRx,
-      clutterLossDb,
-      sitePosition,
-      bearing,
-      clutterMap,
-      rainRateMmH,
-      atmosphericLossDbPerKm,
-      useTwoRay,
-    });
-
-    if (totalLoss > targetLoss) {
-      const ratio = clamp((targetLoss - lastLoss) / Math.max(1e-9, totalLoss - lastLoss), 0, 1);
-      return lastPassing + (sample.distanceKm - lastPassing) * ratio;
-    }
-
-    lastPassing = sample.distanceKm;
-    lastLoss = totalLoss;
-  }
-
-  return lastPassing;
-};
+// Wrapper that adds mapped clutter loss to the shared module's findReliableDistanceFromLossMap
+const findReliableDistanceFromLossMap = (params) => sharedFindReliableDistanceFromLossMap({
+  ...params,
+  extraLossFn: makeClutterMapExtraLossFn(params.sitePosition, params.bearing, params.clutterMap),
+});
 
 const fetchElevationChunk = async (chunk) => {
   let lastError;
@@ -1975,6 +1554,7 @@ function App() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isPanelOpen, setIsPanelOpen] = useState(false);
   const [isAboutOpen, setIsAboutOpen] = useState(false);
+  const [themeMode, setThemeMode] = useState('dark');
   const [freqBand, setFreqBand] = useState('vhf');
   const [nextSiteId, setNextSiteId] = useState(2);
   const [analysisNotice, setAnalysisNotice] = useState('Ready for coverage prediction.');
@@ -1983,6 +1563,10 @@ function App() {
   const predictionRevisionRef = useRef(0);
   const sitesRef = useRef(sites);
   const terrainProfileCacheRef = useRef(new Map());
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = themeMode;
+  }, [themeMode]);
 
   const activeSite = sites.find((site) => site.id === activeSiteId) ?? sites[0];
   const mapCenter = activeSite?.position ?? [3.1390, 101.6869];
@@ -2952,7 +2536,7 @@ function App() {
     const haatSamples = [];
     const newPolygons = { strong: [], moderate: [], weak: [] };
     const radialMargins = [];
-    const itmDistanceGrid = createItmDistanceGrid(maxRangeKm);
+    const itmDistanceGrid = createItmDistanceGridWithSampling(maxRangeKm);
     const itmRadialLosses = Array(radialCount).fill(null);
     let itmApiFailures = 0;
     let itmApiFallbacks = 0;
@@ -3034,18 +2618,16 @@ function App() {
         if (grade.key === 'weak') {
           const itmPathLoss = getItmApiPathLoss(itmApiLossMap, radius);
           const pathLossAtRadius = typeof itmPathLoss === 'number'
-            ? itmPathLoss + calculateExternalLosses({
+            ? itmPathLoss + sharedCalculateExternalLosses({
               freq,
               distanceKm: radius,
               hTx,
               hRx,
               clutterLossDb: activeClutterLossDb,
-              sitePosition: site.position,
-              bearing,
-              clutterMap: useLandCover ? clutterMap : null,
               rainRateMmH: rainRate,
               atmosphericLossDbPerKm: atmosphericLoss,
               useTwoRay,
+              extraLossFn: makeClutterMapExtraLossFn(site.position, bearing, useLandCover ? clutterMap : null),
             })
             : calculateTotalPathLoss({
               modelKey: propagationModel,
@@ -3261,7 +2843,7 @@ function App() {
 
   return (
     <div className="app-container">
-      <div className="pro-metrics-bar glass-panel">
+      <div className="pro-metrics-bar glass-panel no-print">
         <div className="metric-strip">
           <div className="metric-box">
             <span className="metric-label metric-label-strong">STRONG TOTAL</span>
@@ -3294,14 +2876,15 @@ function App() {
 
       <div className="ui-overlay">
         <button
-          className="fab-scan mobile-only"
+          className="fab-scan mobile-only no-print"
           onClick={analyzeTerrain}
           disabled={isAnalyzing}
+          aria-label={isAnalyzing ? 'Analyzing terrain' : 'Run coverage scan'}
         >
           {isAnalyzing ? <div className="loading-spinner" /> : <Zap size={24} fill="white" />}
         </button>
 
-        <div className="glass-panel header-panel pc-only">
+        <div className="glass-panel header-panel pc-only no-print">
           <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
             <div style={{ background: 'white', padding: '6px', borderRadius: '10px', display: 'flex', boxShadow: '0 2px 8px rgba(0,0,0,0.05)', border: '1px solid #eee' }}>
               <img src="/brand_logo_v6.png" alt="Brand" style={{ width: '32px', height: '32px', objectFit: 'contain' }} />
@@ -3310,19 +2893,37 @@ function App() {
               <h1 style={{ fontSize: '1.2rem', fontWeight: '900', letterSpacing: '0.5px' }}>9M2PJU Coverage Prediction</h1>
                 <p style={{ fontSize: '0.75rem', fontWeight: '600' }}>Multi-Site Coverage Prediction v{APP_VERSION}</p>
             </div>
+            <button
+              type="button"
+              className="theme-toggle-button"
+              aria-label={themeMode === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+              onClick={() => setThemeMode(themeMode === 'dark' ? 'light' : 'dark')}
+              style={{ marginLeft: 'auto', minWidth: '44px', minHeight: '44px', border: '1px solid var(--glass-border)', borderRadius: 'var(--control-radius)', background: 'var(--control-bg)', color: 'var(--text-primary)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+            >
+              {themeMode === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
+            </button>
           </div>
         </div>
 
         <div className={`glass-panel control-panel ${isPanelOpen ? 'open' : ''}`}>
-          <div className="bottom-sheet-drag mobile-only" onClick={() => setIsPanelOpen(!isPanelOpen)} />
+          <div className="bottom-sheet-drag mobile-only no-print" role="button" tabIndex={0} aria-label="Toggle control panel" onClick={() => setIsPanelOpen(!isPanelOpen)} />
 
-          <div className="mobile-header-content mobile-only" onClick={() => setIsPanelOpen(!isPanelOpen)} style={{ marginBottom: '20px' }}>
+          <div className="mobile-header-content mobile-only no-print" onClick={() => setIsPanelOpen(!isPanelOpen)} style={{ marginBottom: '20px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
               <img src="/brand_logo_v6.png" alt="Logo" style={{ width: '32px', height: '32px', objectFit: 'contain' }} />
               <div>
                 <h1 style={{ margin: 0, fontSize: '1.1rem', fontWeight: '900', color: 'var(--title-blue)', letterSpacing: '0.5px' }}>9M2PJU Coverage Prediction</h1>
                   <p style={{ margin: 0, fontSize: '0.65rem', fontWeight: '600', color: 'var(--text-secondary)' }}>Multi-Site Coverage Prediction v{APP_VERSION}</p>
               </div>
+              <button
+                type="button"
+                className="theme-toggle-button"
+                aria-label={themeMode === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+                onClick={(event) => { event.stopPropagation(); setThemeMode(themeMode === 'dark' ? 'light' : 'dark'); }}
+                style={{ marginLeft: 'auto', minWidth: '44px', minHeight: '44px', border: '1px solid var(--glass-border)', borderRadius: 'var(--control-radius)', background: 'var(--control-bg)', color: 'var(--text-primary)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+              >
+                {themeMode === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
+              </button>
             </div>
           </div>
 
@@ -3387,11 +2988,11 @@ function App() {
                 <strong>{activeSiteTrust.level}</strong>
                 <span>{activeSiteExplanation}</span>
               </div>
-              <div className="segmented-control" role="group" aria-label="Map tool mode">
-                <button type="button" className={mapToolMode === 'place' ? 'active' : ''} onClick={() => setMapToolMode('place')}>
+              <div className="segmented-control" role="tablist" aria-label="Map tool mode">
+                <button type="button" role="tab" aria-selected={mapToolMode === 'place'} className={mapToolMode === 'place' ? 'active' : ''} onClick={() => setMapToolMode('place')}>
                   <MapPin size={14} /> Place site
                 </button>
-                <button type="button" className={mapToolMode === 'query' ? 'active' : ''} onClick={() => setMapToolMode('query')}>
+                <button type="button" role="tab" aria-selected={mapToolMode === 'query'} className={mapToolMode === 'query' ? 'active' : ''} onClick={() => setMapToolMode('query')}>
                   <Crosshair size={14} /> Check point
                 </button>
               </div>
@@ -3436,14 +3037,14 @@ function App() {
               </button>
               <label className="file-import-button compact-file-button">
                 <Upload size={14} /> Load setup
-                <input type="file" accept=".json,application/json" onChange={importScenario} />
+                <input type="file" accept=".json,application/json" aria-label="Load setup file" onChange={importScenario} />
               </label>
               <button className="secondary-button compact-button" type="button" onClick={copyShareLink}>
                 <Share2 size={14} /> Copy link
               </button>
             </div>
             <label className="toggle-field full-width-toggle">
-              <input type="checkbox" checked={debugMode} onChange={(e) => setDebugMode(e.target.checked)} />
+              <input type="checkbox" checked={debugMode} aria-label="Show debug summary" onChange={(e) => setDebugMode(e.target.checked)} />
               Show debug summary
             </label>
             {debugMode && (
@@ -3498,11 +3099,13 @@ function App() {
 
           <div className="control-group">
             <label className="section-kicker"><Radio size={12} /> BAND SELECTOR</label>
-            <div className="band-selector" role="group" aria-label="Band selector">
+            <div className="band-selector" role="tablist" aria-label="Band selector">
               {BAND_OPTIONS.map((band) => (
                 <button
                   key={band.key}
                   type="button"
+                  role="tab"
+                  aria-selected={freqBand === band.key}
                     className={`band-button ${freqBand === band.key ? 'active' : ''}`}
                     onClick={() => {
                       setFreqBand(band.key);
@@ -3521,6 +3124,7 @@ function App() {
               min={activeBand.min}
                 max={activeBand.max}
                 value={freq}
+                aria-label="Frequency in MHz"
                 onChange={(e) => updatePredictionSetting(setFreq, Number(e.target.value), 'Frequency changed. Run coverage to recalculate.')}
               />
           </div>
@@ -3528,7 +3132,7 @@ function App() {
           <div className="control-group">
             <label><Activity size={12} style={{ marginRight: '6px' }} /> TX POWER: {formatPower(power)}W</label>
             <div className="slider-container">
-              <input type="range" min="0.1" max="100" step="0.1" value={power} onChange={(e) => updatePredictionSetting(setPower, Number(e.target.value))} />
+              <input type="range" min="0.1" max="100" step="0.1" value={power} aria-label="TX power in watts" onChange={(e) => updatePredictionSetting(setPower, Number(e.target.value))} />
               <input
                 className="numeric-input"
                 type="number"
@@ -3545,7 +3149,7 @@ function App() {
           <div className="control-group">
             <label><Layers size={12} style={{ marginRight: '6px' }} /> TOWER HEIGHT: {hTx}m AGL</label>
             <div className="slider-container">
-              <input type="range" min="0" max="300" value={hTx} onChange={(e) => updatePredictionSetting(setHTx, Number(e.target.value))} />
+              <input type="range" min="0" max="300" value={hTx} aria-label="Tower height above ground in meters" onChange={(e) => updatePredictionSetting(setHTx, Number(e.target.value))} />
               <input
                 className="numeric-input"
                 type="number"
@@ -3562,7 +3166,7 @@ function App() {
           <div className="control-group">
             <label><Activity size={12} style={{ marginRight: '6px' }} /> ANTENNA GAIN: {gain}dBi</label>
             <div className="slider-container">
-                <input type="range" min="0" max="20" step="0.5" value={gain} onChange={(e) => updatePredictionSetting(setGain, Number(e.target.value), 'Antenna gain changed. Run coverage to recalculate.')} />
+                <input type="range" min="0" max="20" step="0.5" value={gain} aria-label="TX antenna gain in dBi" onChange={(e) => updatePredictionSetting(setGain, Number(e.target.value), 'Antenna gain changed. Run coverage to recalculate.')} />
               <input
                 className="numeric-input"
                 type="number"
@@ -3579,7 +3183,7 @@ function App() {
           <div className="control-group">
             <label><Activity size={12} style={{ marginRight: '6px' }} /> RX HEIGHT: {hRx.toFixed(1)}m AGL</label>
             <div className="slider-container">
-                <input type="range" min="1" max="30" step="0.5" value={hRx} onChange={(e) => updatePredictionSetting(setHRx, Number(e.target.value))} />
+                <input type="range" min="1" max="30" step="0.5" value={hRx} aria-label="Receiver antenna height above ground in meters" onChange={(e) => updatePredictionSetting(setHRx, Number(e.target.value))} />
               <input
                 className="numeric-input"
                 type="number"
@@ -3598,6 +3202,7 @@ function App() {
             <select
               className="mode-select"
               value={modeKey}
+              aria-label="Mode profile"
               onChange={(e) => {
                 const nextMode = e.target.value;
                   const nextProfile = MODE_PROFILES[nextMode] ?? MODE_PROFILES.fm;
@@ -3621,7 +3226,7 @@ function App() {
 
           <div className="control-group engineering-group">
             <label><FileText size={12} style={{ marginRight: '6px' }} /> ENGINEERING MODEL</label>
-              <select className="mode-select" value={propagationModel} onChange={(e) => updatePredictionSetting(setPropagationModel, e.target.value, 'Engineering model changed. Run coverage to recalculate.')}>
+              <select className="mode-select" value={propagationModel} aria-label="Engineering model" onChange={(e) => updatePredictionSetting(setPropagationModel, e.target.value, 'Engineering model changed. Run coverage to recalculate.')}>
               {PROPAGATION_MODEL_OPTIONS.map((option) => (
                 <option key={option.key} value={option.key}>{option.label}</option>
               ))}
@@ -3633,19 +3238,19 @@ function App() {
               </div>
             )}
             <label className="toggle-field full-width-toggle">
-                <input type="checkbox" checked={useLandCover} onChange={(e) => updatePredictionSetting(setUseLandCover, e.target.checked, 'Land-cover setting changed. Run coverage to recalculate.')} />
+                <input type="checkbox" checked={useLandCover} aria-label="Apply land cover or clutter" onChange={(e) => updatePredictionSetting(setUseLandCover, e.target.checked, 'Land-cover setting changed. Run coverage to recalculate.')} />
               Apply land cover / clutter
             </label>
             {useLandCover && (
               <>
-                  <select className="mode-select stacked-select" value={clutterKey} onChange={(e) => updatePredictionSetting(setClutterKey, e.target.value, 'Clutter profile changed. Run coverage to recalculate.')}>
+                  <select className="mode-select stacked-select" value={clutterKey} aria-label="Clutter profile" onChange={(e) => updatePredictionSetting(setClutterKey, e.target.value, 'Clutter profile changed. Run coverage to recalculate.')}>
                   {CLUTTER_OPTIONS.map((option) => (
                     <option key={option.key} value={option.key}>{option.label} (+{option.lossDb} dB)</option>
                   ))}
                 </select>
                 <label className="file-import-button">
                   <Upload size={14} /> Import clutter GeoJSON
-                  <input type="file" accept=".json,.geojson,application/geo+json,application/json" onChange={importClutterMap} />
+                  <input type="file" accept=".json,.geojson,application/geo+json,application/json" aria-label="Import clutter GeoJSON file" onChange={importClutterMap} />
                 </label>
                 <div className="mode-note">{clutterMapNotice}</div>
               </>
@@ -3674,7 +3279,7 @@ function App() {
                   <input className="numeric-input compact-input" type="number" min="0.01" max="1000" step="0.01" value={rxThresholdUv} onChange={(e) => updatePredictionSetting(setRxThresholdUv, clamp(toNumber(e.target.value), 0.01, 1000))} />
               </label>
               <label>Threshold source
-                  <select className="mini-select" value={thresholdMode} onChange={(e) => updatePredictionSetting(setThresholdMode, e.target.value)}>
+                  <select className="mini-select" value={thresholdMode} aria-label="Threshold source" onChange={(e) => updatePredictionSetting(setThresholdMode, e.target.value)}>
                   {THRESHOLD_MODE_OPTIONS.map((option) => (
                     <option key={option.key} value={option.key}>{option.label}</option>
                   ))}
@@ -3699,21 +3304,21 @@ function App() {
                   <input className="numeric-input compact-input" type="number" min="1" max="99" step="1" value={itmConfidencePercent} onChange={(e) => updatePredictionSetting(setItmConfidencePercent, clamp(toNumber(e.target.value), 1, 99), 'ITM confidence changed. Run coverage to recalculate.')} />
               </label>
               <label>Radial detail
-                  <select className="mini-select" value={coverageRadialMode} onChange={(e) => updatePredictionSetting(setCoverageRadialMode, e.target.value, 'Radial detail changed. Run coverage to recalculate.')}>
+                  <select className="mini-select" value={coverageRadialMode} aria-label="Radial detail" onChange={(e) => updatePredictionSetting(setCoverageRadialMode, e.target.value, 'Radial detail changed. Run coverage to recalculate.')}>
                   {COVERAGE_RADIAL_OPTIONS.map((option) => (
                     <option key={option.key} value={option.key}>{option.label}</option>
                   ))}
                 </select>
               </label>
               <label>Render mode
-                  <select className="mini-select" value={coverageRenderMode} onChange={(e) => updatePredictionSetting(setCoverageRenderMode, e.target.value, 'Render mode changed. Run coverage to recalculate.')}>
+                  <select className="mini-select" value={coverageRenderMode} aria-label="Render mode" onChange={(e) => updatePredictionSetting(setCoverageRenderMode, e.target.value, 'Render mode changed. Run coverage to recalculate.')}>
                   {COVERAGE_RENDER_OPTIONS.map((option) => (
                     <option key={option.key} value={option.key}>{option.label}</option>
                   ))}
                 </select>
               </label>
               <label>Raster cell km
-                  <select className="mini-select" value={rasterCellKm} onChange={(e) => updatePredictionSetting(setRasterCellKm, Number(e.target.value), 'Raster cell size changed. Run coverage to recalculate.')}>
+                  <select className="mini-select" value={rasterCellKm} aria-label="Raster cell size in kilometers" onChange={(e) => updatePredictionSetting(setRasterCellKm, Number(e.target.value), 'Raster cell size changed. Run coverage to recalculate.')}>
                   {RASTER_CELL_OPTIONS_KM.map((option) => (
                     <option key={option} value={option}>{option} km</option>
                   ))}
@@ -3733,7 +3338,7 @@ function App() {
                 </>
               )}
               <label className="toggle-field">
-                  <input type="checkbox" checked={useTwoRay} onChange={(e) => updatePredictionSetting(setUseTwoRay, e.target.checked, 'Two-ray setting changed. Run coverage to recalculate.')} />
+                  <input type="checkbox" checked={useTwoRay} aria-label="Use two rays" onChange={(e) => updatePredictionSetting(setUseTwoRay, e.target.checked, 'Two-ray setting changed. Run coverage to recalculate.')} />
                 Use two rays
               </label>
             </div>
@@ -3742,7 +3347,7 @@ function App() {
             </div>
           </div>
 
-          <div className="control-group legend-group">
+          <div className="control-group legend-group legend">
             <p className="section-kicker">PREDICTED ZONES</p>
             <div className="pro-legend-item">
               <div style={{ width: 10, height: 10, background: '#52c878', border: '1px solid white' }}></div>
@@ -3769,6 +3374,7 @@ function App() {
         maxBounds={WORLD_BOUNDS}
         maxBoundsViscosity={0.85}
         className="map-container"
+        aria-label="Coverage map"
         zoomControl={false}
         scrollWheelZoom
         wheelPxPerZoomLevel={80}
@@ -3893,7 +3499,7 @@ function App() {
       </MapContainer>
 
       {isAboutOpen && (
-        <div className="about-modal-backdrop" role="presentation" onClick={() => setIsAboutOpen(false)}>
+        <div className="about-modal-backdrop no-print" role="presentation" onClick={() => setIsAboutOpen(false)}>
           <div className="about-modal glass-panel" role="dialog" aria-modal="true" aria-labelledby="about-title" onClick={(event) => event.stopPropagation()}>
             <button className="about-close-button" type="button" aria-label="Close about dialog" onClick={() => setIsAboutOpen(false)}>
               <X size={18} />

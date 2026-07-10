@@ -9,6 +9,9 @@
     "build": "vite build",
     "lint": "eslint .",
     "test:rf": "node scripts/rf-smoke-test.mjs",
+    "test:itm": "node scripts/itm-integration-test.mjs",
+    "test:api": "node scripts/api-live-test.mjs",
+    "test": "node scripts/rf-smoke-test.mjs && node scripts/itm-integration-test.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

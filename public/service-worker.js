@@ -1,4 +1,4 @@
-const CACHE_VERSION = '9m2pju-coverage-v4.8.0';
+const CACHE_VERSION = '9m2pju-coverage-v4.9.0';
 const APP_SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const RUNTIME_CACHE = `${CACHE_VERSION}-runtime`;
 const APP_SHELL = [

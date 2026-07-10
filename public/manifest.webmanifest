@@ -1,14 +1,16 @@
 {
-  "name": "9M2PJU Coverage Prediction",
+  "name": "9M2PJU Coverage Prediction — Amateur Radio RF Coverage Map",
   "short_name": "9M2PJU Coverage",
-  "description": "Multi-site terrain-aware RF coverage prediction for amateur radio operators.",
+  "description": "Free terrain-aware RF coverage prediction tool for amateur radio operators. Plan repeater sites, VHF/UHF/SHF coverage with ITM Longley-Rice propagation modeling. Supports 30 MHz to 30 GHz.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "any",
   "background_color": "#07131f",
   "theme_color": "#07131f",
-  "categories": ["utilities", "navigation", "productivity"],
+  "categories": ["utilities", "navigation", "productivity", "education"],
+  "lang": "en",
+  "dir": "ltr",
   "icons": [
     {
       "src": "/brand_logo_v6.png",

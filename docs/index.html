@@ -4,22 +4,188 @@
 <head>
   <meta charset="UTF-8" />
   <link rel="icon" type="image/png" href="/brand_logo_v6.png" />
+  <link rel="icon" type="image/svg+xml" href="/brand_logo_v6.svg" />
   <link rel="apple-touch-icon" href="/brand_logo_v6.png" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0" />
+
+  <!-- Primary Meta Tags -->
+  <title>9M2PJU Coverage Prediction — Amateur Radio RF Coverage Map</title>
+  <meta name="title" content="9M2PJU Coverage Prediction — Amateur Radio RF Coverage Map" />
+  <meta name="description" content="Free terrain-aware RF coverage prediction tool for amateur radio operators. Plan repeater sites, VHF/UHF/SHF coverage, ITM Longley-Rice propagation modeling, terrain diffraction, rain and atmospheric attenuation. Supports 30 MHz to 30 GHz." />
+  <meta name="keywords" content="amateur radio, ham radio, RF coverage prediction, coverage map, repeater planning, propagation model, Longley-Rice, ITM, terrain-aware, VHF, UHF, SHF, Fresnel zone, knife-edge diffraction, Hata model, path loss, signal coverage, radio coverage, 9M2PJU, APRS, LoRa, antenna gain, HAAT" />
+  <meta name="author" content="9M2PJU" />
+  <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
+  <meta name="googlebot" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
+  <meta name="bingbot" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
   <meta name="theme-color" content="#07131f" />
-  <meta name="description" content="Multi-site terrain-aware RF coverage prediction for amateur radio operators." />
+  <meta name="application-name" content="9M2PJU Coverage Prediction" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-title" content="9M2PJU Coverage" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <title>9M2PJU Coverage Prediction</title>
+
+  <!-- Canonical URL -->
+  <link rel="canonical" href="https://coverage.hamradio.my/" />
+
+  <!-- Open Graph / Facebook -->
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://coverage.hamradio.my/" />
+  <meta property="og:title" content="9M2PJU Coverage Prediction — Amateur Radio RF Coverage Map" />
+  <meta property="og:description" content="Free terrain-aware RF coverage prediction tool for amateur radio operators. Plan repeater sites, VHF/UHF/SHF coverage with ITM Longley-Rice propagation modeling, terrain diffraction, and atmospheric attenuation. Supports 30 MHz to 30 GHz." />
+  <meta property="og:image" content="https://coverage.hamradio.my/brand_logo_v6.png" />
+  <meta property="og:image:width" content="1024" />
+  <meta property="og:image:height" content="1024" />
+  <meta property="og:image:alt" content="9M2PJU Coverage Prediction logo" />
+  <meta property="og:site_name" content="9M2PJU Coverage Prediction" />
+  <meta property="og:locale" content="en_US" />
+
+  <!-- Twitter Card -->
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:url" content="https://coverage.hamradio.my/" />
+  <meta name="twitter:title" content="9M2PJU Coverage Prediction — Amateur Radio RF Coverage Map" />
+  <meta name="twitter:description" content="Free terrain-aware RF coverage prediction tool for amateur radio operators. Plan repeater sites, VHF/UHF/SHF coverage with ITM Longley-Rice propagation modeling. Supports 30 MHz to 30 GHz." />
+  <meta name="twitter:image" content="https://coverage.hamradio.my/brand_logo_v6.png" />
+  <meta name="twitter:image:alt" content="9M2PJU Coverage Prediction logo" />
+  <meta name="twitter:creator" content="@9M2PJU" />
+  <meta name="twitter:site" content="@9M2PJU" />
+
+  <!-- Geo Tags -->
+  <meta name="geo.region" content="MY" />
+  <meta name="geo.placename" content="Malaysia" />
+  <meta name="geo.position" content="3.139;101.6869" />
+  <meta name="ICBM" content="3.139, 101.6869" />
+
+  <!-- Structured Data: WebApplication (JSON-LD) -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "WebApplication",
+    "name": "9M2PJU Coverage Prediction",
+    "alternateName": "9M2PJU Coverage Map",
+    "url": "https://coverage.hamradio.my/",
+    "description": "Free terrain-aware RF coverage prediction tool for amateur radio operators. Plan repeater sites, VHF/UHF/SHF coverage with ITM Longley-Rice propagation modeling, terrain diffraction, rain and atmospheric attenuation.",
+    "applicationCategory": "UtilitiesApplication",
+    "operatingSystem": "Any (web browser)",
+    "browserRequirements": "Requires JavaScript. Requires WebGL for map rendering.",
+    "softwareVersion": "4.9.0",
+    "datePublished": "2024-01-01",
+    "dateModified": "2026-07-11",
+    "inLanguage": "en",
+    "isAccessibleForFree": true,
+    "offers": {
+      "@type": "Offer",
+      "price": "0",
+      "priceCurrency": "USD"
+    },
+    "creator": {
+      "@type": "Person",
+      "name": "9M2PJU",
+      "url": "https://github.com/9M2PJU"
+    },
+    "publisher": {
+      "@type": "Person",
+      "name": "9M2PJU",
+      "url": "https://github.com/9M2PJU"
+    },
+    "screenshot": "https://coverage.hamradio.my/brand_logo_v6.png",
+    "featureList": [
+      "Multi-site terrain-aware RF coverage prediction",
+      "ITM Longley-Rice propagation modeling",
+      "Hata and COST-231 empirical models",
+      "ITU-R P.838 rain attenuation",
+      "ITU-R P.676 gaseous atmospheric attenuation",
+      "Deygout multi-obstruction diffraction",
+      "Fresnel zone clearance analysis",
+      "VHF, UHF, and SHF support (30 MHz to 30 GHz)",
+      "FM voice, APRS, SSB, and LoRa profiles",
+      "GeoJSON, PDF, and share link exports",
+      "Light and dark mode",
+      "Mobile and desktop responsive"
+    ],
+    "about": [
+      {
+        "@type": "Thing",
+        "name": "Amateur Radio",
+        "sameAs": "https://en.wikipedia.org/wiki/Amateur_radio"
+      },
+      {
+        "@type": "Thing",
+        "name": "Radio Propagation Model",
+        "sameAs": "https://en.wikipedia.org/wiki/Radio_propagation_model"
+      },
+      {
+        "@type": "Thing",
+        "name": "Longley-Rice Model",
+        "sameAs": "https://en.wikipedia.org/wiki/Longley%E2%80%93Rice_model"
+      },
+      {
+        "@type": "Thing",
+        "name": "Coverage Map",
+        "sameAs": "https://en.wikipedia.org/wiki/Coverage_map"
+      }
+    ],
+    "license": "https://www.gnu.org/licenses/agpl-3.0.html"
+  }
+  </script>
+
+  <!-- Structured Data: BreadcrumbList (JSON-LD) -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    "itemListElement": [
+      {
+        "@type": "ListItem",
+        "position": 1,
+        "name": "9M2PJU Coverage Prediction",
+        "item": "https://coverage.hamradio.my/"
+      }
+    ]
+  }
+  </script>
   <script type="module" crossorigin src="/assets/index-CzjI-xHe.js"></script>
   <link rel="stylesheet" crossorigin href="/assets/index-BEftpmxs.css">
 </head>
 
 <body>
   <div id="root"></div>
+
+  <!-- Noscript fallback for crawlers and JS-disabled users -->
+  <noscript>
+    <div style="max-width: 800px; margin: 40px auto; padding: 20px; font-family: system-ui, sans-serif; color: #1a1a1a;">
+      <h1>9M2PJU Coverage Prediction — Amateur Radio RF Coverage Map</h1>
+      <p><strong>9M2PJU Coverage Prediction</strong> is a free terrain-aware RF coverage prediction tool for amateur radio operators. It supports VHF, UHF, and SHF planning from 30 MHz to 30 GHz.</p>
+      <h2>Features</h2>
+      <ul>
+        <li>Multi-site terrain-aware RF coverage prediction with ITM Longley-Rice propagation modeling</li>
+        <li>Hata and COST-231 empirical path loss models for suburban environments</li>
+        <li>ITU-R P.838 rain attenuation and ITU-R P.676 gaseous atmospheric attenuation</li>
+        <li>Deygout multi-obstruction knife-edge diffraction (ITU-R P.526)</li>
+        <li>Fresnel zone clearance and HAAT (Height Above Average Terrain) analysis</li>
+        <li>Supports FM voice, APRS/packet, SSB/weak-signal, and LoRa profiles</li>
+        <li>Up to four transmitter sites with overlap-aware combined coverage</li>
+        <li>Adjustable TX/RX antenna gain, system loss, receiver threshold, fade margin, and max range</li>
+        <li>ITM reliability and confidence controls, clutter, two-ray, rain, and atmospheric settings</li>
+        <li>Exports to GeoJSON, PDF, setup JSON, and shareable links</li>
+        <li>Light and dark mode, mobile and desktop responsive</li>
+      </ul>
+      <h2>Supported Bands</h2>
+      <p>10m (28 MHz), 6m (50 MHz), 2m (144 MHz), 1.25m (222 MHz), 70cm (430 MHz), 33cm (900 MHz), 23cm (1240 MHz), 13cm (2300 MHz), 9cm (3400 MHz), 5cm (5600 MHz), 3cm (10 GHz), 1.2cm (24 GHz)</p>
+      <h2>Propagation Models</h2>
+      <ul>
+        <li><strong>NTIA ITM / Longley-Rice</strong> — Terrain-aware point-to-point model (authoritative when available)</li>
+        <li><strong>Enhanced Hata</strong> — Okumura-Hata suburban with terrain penalty</li>
+        <li><strong>COST-231 Hata</strong> — Extended Hata for 1.5-2 GHz</li>
+        <li><strong>Free Space</strong> — ITU-R P.525 reference</li>
+        <li><strong>ITM Hybrid</strong> — FSPL + terrain roughness + horizon loss</li>
+      </ul>
+      <p>This application requires JavaScript to run. Please enable JavaScript in your browser to use the coverage prediction map.</p>
+      <p><a href="https://github.com/9M2PJU/9M2PJU-Amateur-Radio-Signals-Coverage-Map">View on GitHub</a></p>
+      <p>Built for the Amateur Radio Community by <strong>9M2PJU</strong></p>
+    </div>
+  </noscript>
+
 </body>
 
 </html>
